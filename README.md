@@ -51,6 +51,14 @@ O agente só **lê** os arquivos dessas ferramentas. Nunca altera a configuraç�
 
 Guarda o cursor de leitura, a fila local de envios pendentes e o sal da máquina. O token de acesso fica no cofre do sistema ou, sem cofre, num arquivo só seu.
 
+## Variáveis de ambiente
+
+| Variável | Para quê |
+|---|---|
+| `ANDROMEDA_AGENT_HOME` | Troca a pasta de estado (banco local, log, credenciais em arquivo). |
+| `ANDROMEDA_AGENT_CREDENTIAL_STORE=file` | Guarda as credenciais em arquivo restrito ao usuário em vez do cofre do sistema. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | Os mesmos das próprias IAs: o agente lê os logs de onde elas gravam. |
+
 ## Sobreviver a reinício
 
 `andromeda-agent install` cria, só para o seu usuário e sem admin:
