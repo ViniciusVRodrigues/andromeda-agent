@@ -20,6 +20,7 @@ const mk = (o: Partial<Bucket> = {}): Bucket => ({
   repo: 'github.com/o/r',
   branch: 'feature/AB#1-x',
   branchApprox: false,
+  keyRepo: true,
   tokens: { input: 10, output: 20, cacheRead: 3, cacheWrite: 4, thinking: 5 },
   interactions: 2,
   ...o,
@@ -84,4 +85,32 @@ test('guardRows: acusa campo extra, caminho, credencial e tipo errado', () => {
   assert.deepEqual(guardRows([{ ...good, branch: 'feat/home/page' }]), []);
   assert.throws(() => assertRowsSafe([{ ...good, cwd: 'x' }]), /cwd/);
   assert.doesNotThrow(() => assertRowsSafe([good]));
+});
+
+test('rowKey: sufixo do repo (sha256 6 hex ou -) e chave antiga sem sufixo', () => {
+  const old = rowKey('codex', 'h', 'm', 0, 'main');
+  const nul = rowKey('codex', 'h', 'm', 0, 'main', null);
+  const a = rowKey('codex', 'h', 'm', 0, 'main', 'github.com/o/a');
+  const b = rowKey('codex', 'h', 'm', 0, 'main', 'github.com/o/b');
+  assert.equal(nul, `${old}:-`);
+  assert.match(a, /^codex:h:m:1970-01-01T00:00:00Z:[0-9a-f]{6}:[0-9a-f]{6}$/);
+  assert.notEqual(a, b);
+  assert.ok(rowKey('codex', 'a'.repeat(32), 'x'.repeat(500), 0, 'main', 'github.com/o/a').length <= 200);
+});
+
+test('buildRow: keyRepo escolhe o formato da chave; branchApproximate vai na linha', () => {
+  const novo = buildRow(mk({ keyRepo: true, branchApprox: true }), ctx);
+  const antigo = buildRow(mk({ keyRepo: false }), ctx);
+  assert.equal(novo.branchApproximate, true);
+  assert.equal(antigo.branchApproximate, false);
+  assert.equal(novo.key, `${antigo.key}:${novo.key.split(':').pop()}`);
+  assert.match(novo.key, /:[0-9a-f]{6}:[0-9a-f]{6}$/);
+  assert.match(antigo.key, /Z:[0-9a-f]{6}$/);
+});
+
+test('guardRows: branchApproximate precisa ser booleano', () => {
+  const good = buildRow(mk(), ctx);
+  assert.ok(guardRows([{ ...good, branchApproximate: 'sim' }]).some((v) => v.includes('branchApproximate')));
+  const { branchApproximate: _b, ...sem } = good;
+  assert.ok(guardRows([sem]).some((v) => v.includes('branchApproximate')));
 });

@@ -79,6 +79,8 @@ export interface PayloadRow {
   branch: string | null;
   taskRef: string | null;
   attributionMethod: AttributionMethod;
+  /** true quando a branch é a atual da pasta, não a do instante do evento. */
+  branchApproximate: boolean;
 }
 
 export type RowStatus = 'accepted' | 'duplicate' | 'rejected';
@@ -154,6 +156,19 @@ export interface TaskItem {
   sprintName: string;
 }
 
+/** `GET /agent/v1/work-item-patterns` (design 5.3 do endpoint v2). */
+export interface WorkItemPatternsResponse {
+  enabled: boolean;
+  updatedAt: string | null;
+  patterns: Array<{
+    /** Regex Java, a que vale no servidor. */
+    regex: string;
+    preset: string;
+    /** A mesma regex convertida para JavaScript, ou null sem conversão segura. */
+    portable: { source: string; flags: string } | null;
+  }>;
+}
+
 /** Credenciais do dispositivo, guardadas no cofre do SO (ou arquivo restrito). */
 export interface DeviceCredentials {
   serverUrl: string;
@@ -177,6 +192,7 @@ export interface AgentApi {
   setActiveTask(req: SetActiveTaskRequest): Promise<SetActiveTaskResponse>;
   clearActiveTask(): Promise<void>;
   listTasks(): Promise<TaskItem[]>;
+  workItemPatterns(): Promise<WorkItemPatternsResponse>;
 }
 
 /** Erros do cliente que o `sync` precisa distinguir. */
@@ -198,7 +214,7 @@ export class ApiError extends Error {
   }
 }
 
-export const AGENT_VERSION = '0.1.0';
+export const AGENT_VERSION = '0.2.0';
 
 /** Evento já com repositório e branch resolvidos localmente (P3), pronto para guardar. */
 export interface ResolvedEvent extends UsageEvent {
@@ -222,6 +238,8 @@ export interface Bucket {
   repo: string | null;
   branch: string | null;
   branchApprox: boolean;
+  /** true: a chave leva o sufixo do repo (hora a partir de `key_repo_from`). */
+  keyRepo: boolean;
   tokens: TokenCounts;
   /** Número de chamadas (eventos distintos) no bucket. */
   interactions: number;

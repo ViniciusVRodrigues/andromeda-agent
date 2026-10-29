@@ -9,6 +9,7 @@ import type {
   RowResult,
   SetActiveTaskResponse,
   TaskItem,
+  WorkItemPatternsResponse,
   UsageBatchResponse,
 } from '../../src/types.js';
 
@@ -27,6 +28,7 @@ export function mkRow(key: string, day = '2026-10-01', over: Partial<PayloadRow>
     branch: null,
     taskRef: null,
     attributionMethod: 'none',
+    branchApproximate: false,
     ...over,
   };
 }
@@ -113,5 +115,18 @@ export class FakeServer implements AgentApi {
   async clearActiveTask(): Promise<void> {}
   async listTasks(): Promise<TaskItem[]> {
     return [];
+  }
+  /** Resposta da rota de padrões; `patternsError` simula 404/403/rede. */
+  patterns: WorkItemPatternsResponse = {
+    enabled: true,
+    updatedAt: null,
+    patterns: [{ regex: '(?i)\\QAB#\\E(\\d+)(?!\\d)', preset: 'AB_HASH', portable: { source: 'AB#(\\d+)(?!\\d)', flags: 'i' } }],
+  };
+  patternsError: ApiError | null = null;
+  patternsCalls = 0;
+  async workItemPatterns(): Promise<WorkItemPatternsResponse> {
+    this.patternsCalls++;
+    if (this.patternsError) throw this.patternsError;
+    return structuredClone(this.patterns);
   }
 }

@@ -10,6 +10,7 @@ import {
   type SetActiveTaskRequest,
   type SetActiveTaskResponse,
   type TaskItem,
+  type WorkItemPatternsResponse,
   type UsageBatchResponse,
 } from '../types.js';
 import type { CredentialStore } from '../auth/tokens.js';
@@ -172,5 +173,9 @@ export class HttpAgentApi implements AgentApi {
   async listTasks(): Promise<TaskItem[]> {
     const j = await this.request('GET', '/agent/v1/tasks');
     return (j.items ?? []) as TaskItem[];
+  }
+
+  async workItemPatterns(): Promise<WorkItemPatternsResponse> {
+    return (await this.request('GET', '/agent/v1/work-item-patterns')) as unknown as WorkItemPatternsResponse;
   }
 }

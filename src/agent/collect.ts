@@ -3,7 +3,8 @@ import type { LogParser, ParserEnv, PayloadRow, ResolvedEvent } from '../types.j
 import type { Store } from '../store/db.js';
 import type { GitInfo } from '../task/git.js';
 import { resolveEvent, resolveTask } from '../task/resolve.js';
-import { compilePatterns, DEFAULT_PATTERNS, type CompiledPattern } from '../task/patterns.js';
+import type { CompiledPattern } from '../task/patterns.js';
+import { currentPatterns } from '../task/server-patterns.js';
 import { assertRowsSafe, buildRow, guardRows } from '../payload.js';
 import { nullLogger, type Logger } from '../log.js';
 
@@ -24,8 +25,6 @@ export interface CollectResult {
   /** Arquivos que falharam (os outros seguem). */
   errors: number;
 }
-
-let defaultPatterns: CompiledPattern[] | null = null;
 
 /**
  * Lê só o que cresceu nos logs das IAs, guarda os eventos e enfileira as linhas
@@ -84,7 +83,7 @@ export async function collect(
 
   if (oldest !== null) {
     const hourStart = Math.floor(oldest / 3_600_000) * 3_600_000;
-    const patterns = opts.patterns ?? (defaultPatterns ??= compilePatterns(DEFAULT_PATTERNS));
+    const patterns = opts.patterns ?? currentPatterns(store);
     const activeTask = store.getLocalActiveTask();
     const salt = store.getOrCreateSalt();
     const safe: PayloadRow[] = [];

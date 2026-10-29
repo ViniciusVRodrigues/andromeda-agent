@@ -8,6 +8,7 @@ import type { CredentialStore } from '../auth/tokens.js';
 import { ReauthRequired } from '../client/http.js';
 import { assertRowsSafe } from '../payload.js';
 import { sendPending } from '../sync/sender.js';
+import { refreshPatterns, PATTERNS_TTL_MS } from '../task/server-patterns.js';
 import { buildHeartbeat, heartbeatDue } from '../sync/heartbeat.js';
 import { reconcile } from '../sync/reconcile.js';
 import { nullLogger, type Logger } from '../log.js';
@@ -46,6 +47,7 @@ export function guardedApi(api: AgentApi): AgentApi {
     setActiveTask: (r) => api.setActiveTask(r),
     clearActiveTask: () => api.clearActiveTask(),
     listTasks: () => api.listTasks(),
+    workItemPatterns: () => api.workItemPatterns(),
   };
 }
 
@@ -81,10 +83,12 @@ export interface LoopMemory {
   upgrade: boolean;
   failedRefreshToken: string | null;
   forceHeartbeat: boolean;
+  /** Instante da última tentativa de buscar os padrões de branch (no máximo uma por hora). */
+  patternsTriedAt: number | null;
 }
 
 export function newMemory(): LoopMemory {
-  return { upgrade: false, failedRefreshToken: null, forceHeartbeat: true };
+  return { upgrade: false, failedRefreshToken: null, forceHeartbeat: true, patternsTriedAt: null };
 }
 
 function applyServerTask(deps: AgentDeps, t: ActiveTask): void {
@@ -144,6 +148,12 @@ export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSumm
     }
   };
 
+  // padrões de branch do servidor: uma busca por hora, erro só vira aviso
+  if (!mem.upgrade && (mem.patternsTriedAt === null || clock() - mem.patternsTriedAt > PATTERNS_TTL_MS)) {
+    mem.patternsTriedAt = clock();
+    await refreshPatterns(store, api, clock(), log);
+  }
+
   // heartbeat
   const lastHb = store.getMeta('last_heartbeat');
   if (!mem.upgrade && (mem.forceHeartbeat || heartbeatDue(lastHb === null ? null : Number(lastHb), clock()))) {
@@ -153,6 +163,7 @@ export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSumm
       store.setMeta('last_heartbeat', String(clock()));
       sum.heartbeat = true;
       if (hb.activeTask) applyServerTask(deps, hb.activeTask);
+      else store.setLocalActiveTask(null);
       if (hb.minVersion && versionLess(AGENT_VERSION, hb.minVersion)) mem.upgrade = true;
     } catch (e) {
       onError('heartbeat', e);

@@ -18,7 +18,11 @@ Contagens de tokens, modelo, horário, id da sessão, id da mensagem, pasta e br
 
 Cada linha de uso:
 
-`key, tool, sessionHash, model, hour, day, tokens{input,output,cacheRead,cacheWrite,thinking}, interactions, origin, repo, branch, taskRef, attributionMethod`
+`key, tool, sessionHash, model, hour, day, tokens{input,output,cacheRead,cacheWrite,thinking}, interactions, origin, repo, branch, branchApproximate, taskRef, attributionMethod`
+
+`key` é opaca para o servidor: `ferramenta:sessionHash:modelo:hora:hash(branch):hash(repo)`, com os dois hashes de 6 caracteres do SHA-256. `taskRef` só vai quando você marcou a tarefa com `andromeda-agent task`; a tarefa tirada do nome da branch é resolvida pelo servidor, que recebe a branch e `attributionMethod`. `branchApproximate` diz se a branch é a atual da pasta, e não a do instante da chamada.
+
+O agente também lê do servidor os padrões de branch da organização (`GET /agent/v1/work-item-patterns`), sem enviar nada seu nessa chamada.
 
 Mais, no lote: `batchId, agentVersion, timezone`.
 
