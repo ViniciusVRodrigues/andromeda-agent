@@ -73,6 +73,11 @@ test('guardRows: acusa campo extra, caminho, credencial e tipo errado', () => {
     assert.ok(guardRows([{ ...good, branch: bad }]).some((v) => v.includes('branch')), bad);
   }
   assert.ok(guardRows([{ ...good, repo: 'https://u:t@github.com/o/r' }]).some((v) => v.includes('credencial')));
+  // O que o normalizeRemote antigo deixava passar a partir de uma pasta local.
+  for (const bad of ['d/work/cliente-x/app', 'c/users/joao/repo', 'c/\\users\\joao', 'github.com']) {
+    assert.ok(guardRows([{ ...good, repo: bad }]).some((v) => v.includes('repo')), bad);
+  }
+  assert.deepEqual(guardRows([{ ...good, repo: 'dev.azure.com/org/proj/repo' }]), []);
   assert.ok(guardRows([{ ...good, interactions: 1.5 }]).length > 0);
   assert.ok(guardRows([{ ...good, tokens: { ...good.tokens, input: -1 } }]).length > 0);
   assert.ok(guardRows([{ ...good, key: 5 }]).length > 0);

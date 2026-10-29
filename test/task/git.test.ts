@@ -34,6 +34,24 @@ test('normalizeRemote: formas suportadas', () => {
   assert.equal(normalizeRemote('nada'), null);
 });
 
+test('normalizeRemote: remoto que é pasta local vira null', () => {
+  for (const u of [
+    'C:\\Users\\joao\\repos\\segredo.git',
+    'D:/work/cliente-x/app',
+    'd:work/app',
+    'file://C:/Users/joao/repo',
+    'file:///home/joao/repo.git',
+    '\\\\servidor\\share\\repo.git',
+    '/home/joao/repo.git',
+    '../outro-clone',
+    'servidor:repo',
+  ]) {
+    assert.equal(normalizeRemote(u), null, u);
+  }
+  // Alias de ssh com usuário continua valendo.
+  assert.equal(normalizeRemote('git@github-work:owner/repo.git'), 'github-work/owner/repo');
+});
+
 test('normalizeRemote: token nunca sobra no resultado', () => {
   for (const u of [
     'https://user:tok_abc@github.com/o/r.git',

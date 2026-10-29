@@ -70,6 +70,8 @@ export const ALLOWED_TOKEN_FIELDS: readonly (keyof TokenCounts)[] = [
 
 const LOCAL_PATH = [/^[A-Za-z]:[\\/]/, /^\\\\/, /^\/(Users|home)\//, /^~\//, /[A-Za-z]:\\/];
 const CRED_URL = /:\/\/[^/]*@/;
+/** Host com pelo menos dois caracteres e um ou mais segmentos, sem `:`, `@` nem `\`. */
+const REPO_SHAPE = /^[a-z0-9][a-z0-9.-]+(\/[^/\s\\:@]+)+$/;
 
 function checkString(where: string, v: string, out: string[]): void {
   if (LOCAL_PATH.some((r) => r.test(v))) out.push(`${where}: valor parece caminho local`);
@@ -104,6 +106,10 @@ export function guardRows(rows: readonly unknown[]): string[] {
       if (v === null) continue;
       if (typeof v !== 'string') out.push(`${w}.${k}: deve ser texto ou nulo`);
       else checkString(`${w}.${k}`, v, out);
+    }
+    // `repo` só sai na forma que o normalizeRemote produz: host e caminho, nada de disco.
+    if (typeof row.repo === 'string' && !REPO_SHAPE.test(row.repo)) {
+      out.push(`${w}.repo: não tem a forma host/caminho`);
     }
     if (!Number.isInteger(row.interactions) || (row.interactions as number) < 0) {
       out.push(`${w}.interactions: deve ser inteiro >= 0`);

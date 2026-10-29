@@ -29,13 +29,16 @@ function runGit(dir: string, args: string[]): Promise<string | null> {
  */
 export function normalizeRemote(url: string): string | null {
   let s = url.trim();
-  if (!s) return null;
+  // Pasta local (`C:\...`, `D:/...`, `\\servidor\...`) nunca é remoto de host.
+  if (!s || s.includes('\\') || /^[A-Za-z]:/.test(s)) return null;
 
   let host: string;
   let path: string;
 
   const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(s);
   if (scheme) {
+    // `file://` e outros esquemas apontam para disco, não para um host.
+    if (!/^(https?|ssh|git|git\+ssh|ssh\+git):\/\/$/i.test(scheme[0])) return null;
     s = s.slice(scheme[0].length);
     const slash = s.indexOf('/');
     let authority = slash === -1 ? s : s.slice(0, slash);
@@ -53,12 +56,15 @@ export function normalizeRemote(url: string): string | null {
       host = authority;
     }
   } else {
-    // scp-like: [usuario@]host:caminho
-    const m = /^(?:[^@/:]*@)?([^:/]+):(.*)$/.exec(s);
+    // scp-like: [usuario@]host:caminho. Sem usuário, o host precisa de ponto:
+    // `servidor:repo` pode ser só uma pasta com ':' no nome.
+    const m = /^(?:([^@/:]*)@)?([^:/]+):(.*)$/.exec(s);
     if (!m) return null;
-    host = m[1]!;
-    path = '/' + m[2]!;
+    if (m[1] === undefined && !m[2]!.includes('.')) return null;
+    host = m[2]!;
+    path = '/' + m[3]!;
   }
+  if (!/^[a-z0-9][a-z0-9.-]*$/i.test(host)) return null;
 
   path = path.split(/[?#]/)[0]!;
   host = host.toLowerCase();
