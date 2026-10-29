@@ -1,34 +1,62 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compilePatterns, DEFAULT_PATTERNS, taskRefFromBranch } from '../../src/task/patterns.js';
+import { compileServerPatterns, DEFAULT_PATTERNS, taskRefFromBranch } from '../../src/task/patterns.js';
+import type { WorkItemPatternsResponse } from '../../src/types.js';
 
-const p = compilePatterns(DEFAULT_PATTERNS);
+const p = compileServerPatterns(DEFAULT_PATTERNS);
 
-test('taskRefFromBranch: casos', () => {
+const jira = { regex: '([A-Z][A-Z0-9]{1,9}-\\d+)', preset: 'JIRA_KEY', portable: { source: '([A-Z][A-Z0-9]{1,9}-\\d+)', flags: '' } };
+const num = { regex: '(?:^|/)(\\d{2,7})(?=[-_/.]|$)', preset: 'NUMBER', portable: { source: '(?:^|/)(\\d{2,7})(?=[-_/.]|$)', flags: '' } };
+
+test('default do servidor: só AB#<n>', () => {
   const cases: Array<[string, string | null]> = [
     ['feature/AB#1234-login', 'AB#1234'],
-    ['fix/4567-bug-x', '4567'],
-    ['bugfix/task-987', '987'],
-    ['feat/PROJ-88_foo', 'PROJ-88'],
+    ['feature/ab#99-x', 'AB#99'],
+    ['fix/4567-bug-x', null],
+    ['feat/PROJ-88_foo', null],
+    ['AB#12345x', 'AB#12345'],
     ['main', null],
-    ['claude/agt1b-prototipo-416f27', null],
     ['HEAD', null],
   ];
   for (const [b, e] of cases) assert.equal(taskRefFromBranch(b, p), e, b);
   assert.equal(taskRefFromBranch(null, p), null);
 });
 
-test('compilePatterns: validações', () => {
-  assert.throws(() => compilePatterns(['abc', '(x)', 'semgrupo']), /Padrão 0.*grupo/);
-  assert.throws(() => compilePatterns(['(a)', 'b+']), /Padrão 1/);
-  assert.throws(() => compilePatterns(['(' + 'a'.repeat(200) + ')']), /longo/);
-  assert.throws(() => compilePatterns(Array.from({ length: 11 }, () => '(a)')), /demais/);
-  assert.throws(() => compilePatterns(['(a']), /inválido/);
+test('ordem do servidor é respeitada: Jira antes do número', () => {
+  const resp: WorkItemPatternsResponse = { enabled: true, updatedAt: null, patterns: [jira, num] };
+  const c = compileServerPatterns(resp);
+  assert.equal(taskRefFromBranch('feat/PROJ-88_foo', c), 'PROJ-88');
+  assert.equal(taskRefFromBranch('fix/4567-bug', c), '4567');
 });
 
-test('compilePatterns: (?i) vira flag i', () => {
-  const [c] = compilePatterns(['(?i)(ticket-\\d+)']);
-  assert.equal(taskRefFromBranch('x/TICKET-5', [c!]), 'TICKET-5');
+test('portable null, flag estranha ou regex inválida: o servidor decide e o match pula', () => {
+  const resp: WorkItemPatternsResponse = {
+    enabled: true,
+    updatedAt: null,
+    patterns: [
+      { regex: 'x', preset: 'CUSTOM', portable: null },
+      { regex: 'x', preset: 'CUSTOM', portable: { source: '(a\\d+)', flags: 'g' } },
+      { regex: 'x', preset: 'CUSTOM', portable: { source: '(a', flags: '' } },
+      jira,
+    ],
+  };
+  const c = compileServerPatterns(resp);
+  assert.deepEqual(c.map((x) => x.serverOnly), [true, true, true, false]);
+  assert.equal(taskRefFromBranch('a12', c), null);
+  assert.equal(taskRefFromBranch('feat/PROJ-1', c), 'PROJ-1');
+});
+
+test('enabled:false não deixa nenhum padrão local', () => {
+  assert.deepEqual(compileServerPatterns({ ...DEFAULT_PATTERNS, enabled: false }), []);
+});
+
+test('prefixo AB# só no preset AB_HASH com grupo numérico', () => {
+  const c = compileServerPatterns({
+    enabled: true,
+    updatedAt: null,
+    patterns: [{ regex: 'x', preset: 'PREFIX', portable: { source: 'task-(\\d+)', flags: 'i' } }],
+  });
+  assert.equal(taskRefFromBranch('feat/task-55', c), '55');
 });
 
 test('branch é cortada em 255 caracteres', () => {

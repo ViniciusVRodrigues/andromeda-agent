@@ -30,14 +30,14 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 | `andromeda-agent run` | Roda o agente em primeiro plano (é o que o serviço executa). `run --once` faz um ciclo e sai. |
 | `andromeda-agent --dry-run [--day AAAA-MM-DD]` | Mostra o JSON exato que seria enviado, sem enviar nada e sem gravar nada no estado. |
 | `andromeda-agent task <ref>` | Marca a tarefa ativa. O uso de IA sem tarefa do mesmo dia passa a apontar para ela (retroage). |
-| `andromeda-agent task --clear` | Tira a tarefa ativa. |
+| `andromeda-agent task --clear` | Tira a tarefa ativa. Ela não expira sozinha: o `status` avisa quando passa de 12 h. |
 | `andromeda-agent task --list` | Lista as tarefas da sua sprint. |
 
 ## IAs suportadas
 
-Na v1: **Claude Code** e **Codex**.
+**Claude Code**, **Codex**, **Gemini CLI**, **opencode** (1.x), **Kilo** (7.x) e **Cline** (extensão clássica, `ui_messages.json`).
 
-Próximas: Gemini CLI, opencode, Copilot CLI e VS Code, Cline, Roo e Kilo.
+Ainda não: Roo Code (não grava o modelo de cada requisição), Copilot no VS Code (conta a menos no modo agente e não separa o cache), Copilot CLI, opencode 2.x e Cline 4.x (formato sem confirmação). O `andromeda-agent doctor` mostra quantos logs de cada IA ele achou.
 
 O agente só **lê** os arquivos dessas ferramentas. Nunca altera a configuração delas.
 
@@ -57,7 +57,7 @@ Guarda o cursor de leitura, a fila local de envios pendentes e o sal da máquina
 |---|---|
 | `ANDROMEDA_AGENT_HOME` | Troca a pasta de estado (banco local, log, credenciais em arquivo). |
 | `ANDROMEDA_AGENT_CREDENTIAL_STORE=file` | Guarda as credenciais em arquivo restrito ao usuário em vez do cofre do sistema. |
-| `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | Os mesmos das próprias IAs: o agente lê os logs de onde elas gravam. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`, `OPENCODE_DATA_DIR`, `OPENCODE_DB`, `KILO_DB`, `CLINE_DATA_DIR` | Os mesmos das próprias IAs: o agente lê os logs de onde elas gravam. |
 
 ## Sobreviver a reinício
 

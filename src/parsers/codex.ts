@@ -70,6 +70,19 @@ function diff(cur: Usage, prev: Usage): Usage {
   };
 }
 
+function isEmptyUsage(u: Usage): boolean {
+  return u.input === 0 && u.cached === 0 && u.cacheWrite === 0 && u.output === 0 && u.reasoning === 0;
+}
+
+function sameComponents(a: Usage, b: Usage): boolean {
+  return a.input === b.input && a.cached === b.cached && a.cacheWrite === b.cacheWrite && a.output === b.output && a.reasoning === b.reasoning;
+}
+
+/** Algum componente menor que o anterior: o contador recomeçou. */
+function anyComponentLess(a: Usage, b: Usage): boolean {
+  return a.input < b.input || a.cached < b.cached || a.cacheWrite < b.cacheWrite || a.output < b.output || a.reasoning < b.reasoning;
+}
+
 function loadState(s: string | undefined): CodexState {
   if (!s) return { ...EMPTY };
   try {
@@ -133,10 +146,13 @@ export function parseCodexLines(
         if (payload.type !== 'token_count' || st.useRecord || !Number.isFinite(ts)) break;
         const total = readUsage(obj(payload.info)?.total_token_usage);
         if (!total) break;
+        // Compara pelos componentes, não pelo `total_tokens`: a extensão do VS Code grava
+        // `token_count` de histórico restaurado (componentes zerados, só o total muda).
+        if (isEmptyUsage(total)) break;
         let delta = total;
         if (st.last) {
-          if (total.total === st.last.total) break;
-          delta = total.total < st.last.total ? total : diff(total, st.last);
+          if (sameComponents(total, st.last)) break;
+          delta = anyComponentLess(total, st.last) ? total : diff(total, st.last);
         }
         st.last = total;
         emit(`${st.sessionId || fallbackId}:${total.total}`, ts, null, toTokens(delta));

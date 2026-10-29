@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../../src/store/db.js';
 import type { ResolvedEvent } from '../../src/types.js';
 import { mkRow } from '../sync/fake-server.js';
+import { buildRow, rowKey, sessionHash } from '../../src/payload.js';
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'ag-db-'));
@@ -44,23 +45,141 @@ test('dedupe global: id repetido com output crescente e fora de ordem fica com o
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('buckets: mesma sessão, hora e branch em repositórios diferentes vira um bucket só', () => {
-  // A chave da linha (contrato) não tem repo: dois buckets por repo colidiriam e um sumiria.
+const H = 3_600_000;
+const T14 = Date.UTC(2026, 9, 29, 14);
+const T15 = T14 + H;
+
+/** Desfaz a migração: devolve a base ao schema v1 (sem `key_repo_from`). */
+function downgradeToV1(dir: string): void {
+  const raw = new DatabaseSync(join(dir, 'agent.db'));
+  raw.exec("DELETE FROM meta WHERE k='key_repo_from'");
+  raw.exec('PRAGMA user_version=1');
+  raw.close();
+}
+
+test('base nova: schema v2, key_repo_from 0 e uma linha por repo desde o início', () => {
   const dir = tmp();
   const s = Store.open(dir);
+  assert.equal(s.getMeta('key_repo_from'), '0');
   s.upsertEvents([
-    ev('a', 1000, 10, { repo: 'github.com/o/ms' }),
-    ev('b', 2000, 20, { repo: 'github.com/o/ui' }),
-    ev('c', 3000, 30, { repo: 'github.com/o/ui' }),
-    ev('d', 4000, 40, { repo: null, branchApprox: true }),
+    ev('a', T14 + 1000, 10, { repo: 'github.com/o/ms' }),
+    ev('b', T14 + 2000, 20, { repo: 'github.com/o/ui' }),
+    ev('c', T14 + 3000, 30, { repo: 'github.com/o/ui' }),
   ]);
   const b = s.bucketsSince(0, 'UTC');
+  assert.equal(b.length, 2);
+  assert.ok(b.every((x) => x.keyRepo));
+  assert.deepEqual(b.map((x) => [x.repo, x.interactions, x.tokens.output]).sort(), [
+    ['github.com/o/ms', 1, 10],
+    ['github.com/o/ui', 2, 50],
+  ]);
+  s.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('migração v1 -> v2: hora já no outbox mantém o agrupamento antigo; a seguinte usa o novo', () => {
+  const dir = tmp();
+  const s = Store.open(dir);
+  // Hora 14 já enviada com a chave antiga (qualquer status conta).
+  s.enqueue([mkRow('antiga', '2026-10-29', { hour: '2026-10-29T14:00:00Z' })]);
+  s.close();
+  downgradeToV1(dir);
+
+  const m = Store.open(dir);
+  assert.equal(m.getMeta('key_repo_from'), String(T15));
+  const raw = new DatabaseSync(join(dir, 'agent.db'));
+  assert.equal(Number((raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version), 2);
+  raw.close();
+  m.upsertEvents([
+    ev('a', T14 + 1000, 10, { repo: 'github.com/o/ms' }),
+    ev('b', T14 + 2000, 20, { repo: 'github.com/o/ui' }),
+    ev('c', T14 + 3000, 30, { repo: 'github.com/o/ui' }),
+    ev('d', T14 + 4000, 40, { repo: null, branchApprox: true }),
+    ev('e', T15 + 1000, 5, { repo: 'github.com/o/ms' }),
+    ev('f', T15 + 2000, 6, { repo: 'github.com/o/ui' }),
+  ]);
+  const b = m.bucketsSince(0, 'UTC');
+  const h14 = b.filter((x) => x.hourStart === T14);
+  assert.equal(h14.length, 1);
+  assert.equal(h14[0]!.keyRepo, false);
+  assert.equal(h14[0]!.interactions, 4);
+  assert.equal(h14[0]!.tokens.output, 100);
+  assert.equal(h14[0]!.repo, 'github.com/o/ui'); // repo de mais chamadas, como na v1
+  assert.equal(h14[0]!.branchApprox, true);
+  const h15 = b.filter((x) => x.hourStart === T15);
+  assert.equal(h15.length, 2);
+  assert.ok(h15.every((x) => x.keyRepo));
+  m.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('migração v1 -> v2 com outbox vazio grava 0', () => {
+  const dir = tmp();
+  Store.open(dir).close();
+  downgradeToV1(dir);
+  const m = Store.open(dir);
+  assert.equal(m.getMeta('key_repo_from'), '0');
+  m.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('migração: a mesma hora gera as mesmas chaves e nada novo entra no outbox', () => {
+  const dir = tmp();
+  const s = Store.open(dir);
+  const events = [
+    ev('a', T14 + 1000, 10, { repo: 'github.com/o/ms' }),
+    ev('b', T14 + 2000, 20, { repo: 'github.com/o/ui' }),
+  ];
+  // Base v1 com a hora 14 já enviada, com a chave antiga (sem repo).
+  const hash = sessionHash('salt', 'claude-code', 's1');
+  const oldKey = rowKey('claude-code', hash, 'm', T14, 'main');
+  s.enqueue([mkRow(oldKey, '2026-10-29', { hour: '2026-10-29T14:00:00Z' })]);
+  s.applyResults([{ key: oldKey, status: 'accepted' }], 1);
+  s.close();
+  downgradeToV1(dir);
+
+  const m = Store.open(dir);
+  m.upsertEvents(events);
+  const rows = m.bucketsSince(0, 'UTC').map((x) => buildRow(x, { salt: 'salt', taskRef: null, attributionMethod: 'none' }));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.key, oldKey);
+  // A linha regerada é maior que a enviada só se cresceu; aqui o enqueue não cria chave nova.
+  m.enqueue(rows);
+  assert.equal(m.stats().sent + m.stats().pending, 1);
+  m.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('dedupe: mesma message.id na virada da hora fica na hora em que começou', () => {
+  const dir = tmp();
+  const s = Store.open(dir);
+  const t1 = Date.UTC(2026, 9, 29, 14, 59, 59);
+  const t2 = Date.UTC(2026, 9, 29, 15, 0, 2);
+  s.upsertEvents([ev('m1', t1, 10)]);
+  s.upsertEvents([ev('m1', t2, 50)]);
+  assert.equal(s.eventCount(), 1);
+  const b = s.bucketsSince(0, 'UTC');
   assert.equal(b.length, 1);
-  assert.equal(b[0]!.interactions, 4);
-  assert.equal(b[0]!.tokens.output, 100);
-  assert.equal(b[0]!.tokens.cacheRead, 8);
-  assert.equal(b[0]!.repo, 'github.com/o/ui');
-  assert.equal(b[0]!.branchApprox, true);
+  assert.equal(b[0]!.hourStart, T14);
+  assert.equal(b[0]!.tokens.output, 50);
+  // Ordem inversa: o registro maior chega primeiro.
+  const d2 = tmp();
+  const s2 = Store.open(d2);
+  s2.upsertEvents([ev('m1', t2, 50)]);
+  s2.upsertEvents([ev('m1', t1, 10)]);
+  assert.equal(s2.bucketsSince(0, 'UTC')[0]!.hourStart, T14);
+  s.close();
+  s2.close();
+  rmSync(dir, { recursive: true, force: true });
+  rmSync(d2, { recursive: true, force: true });
+});
+
+test('evento sem tokens (entrada, saída e cache zerados) não é guardado', () => {
+  const dir = tmp();
+  const s = Store.open(dir);
+  const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0 };
+  s.upsertEvents([ev('z', 1000, 0, { tokens: zero }), ev('ok', 2000, 0, { tokens: { ...zero, cacheRead: 1 } })]);
+  assert.equal(s.eventCount(), 1);
   s.close();
   rmSync(dir, { recursive: true, force: true });
 });

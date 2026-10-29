@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Bucket, UsageEvent } from '../../src/types.js';
 import type { GitInfo } from '../../src/task/git.js';
-import { compilePatterns, DEFAULT_PATTERNS } from '../../src/task/patterns.js';
+import { compileServerPatterns, DEFAULT_PATTERNS } from '../../src/task/patterns.js';
 import { resolveEvent, resolveTask } from '../../src/task/resolve.js';
 
 const tokens = { input: 1, output: 2, cacheRead: 0, cacheWrite: 0, thinking: 0 };
@@ -59,19 +59,21 @@ const bucket = (o: Partial<Bucket> = {}): Bucket => ({
   repo: 'github.com/o/r',
   branch: 'feature/AB#7-x',
   branchApprox: false,
+  keyRepo: true,
   tokens,
   interactions: 1,
   ...o,
 });
-const patterns = compilePatterns(DEFAULT_PATTERNS);
+const patterns = compileServerPatterns(DEFAULT_PATTERNS);
 
 test('resolveTask: explícita, branch, nenhuma', () => {
   const b = bucket();
   const since = b.hourStart + 3_599_999;
   const at = { taskRef: 'PROJ-1', since, repo: null };
   assert.deepEqual(resolveTask(b, { activeTask: at, patterns }), { taskRef: 'PROJ-1', attributionMethod: 'explicit' });
+  // Da branch o agente não manda taskRef (seria explícito para o servidor): só o método.
   assert.deepEqual(resolveTask(b, { activeTask: { ...at, since: since + 1 }, patterns }), {
-    taskRef: 'AB#7',
+    taskRef: null,
     attributionMethod: 'branch',
   });
   assert.equal(resolveTask(b, { activeTask: { ...at, repo: 'github.com/o/r' }, patterns }).attributionMethod, 'explicit');
@@ -80,4 +82,16 @@ test('resolveTask: explícita, branch, nenhuma', () => {
     taskRef: null,
     attributionMethod: 'none',
   });
+});
+
+test('resolveTask: branch fix/123-foo não casa o default e não gera taskRef', () => {
+  assert.deepEqual(resolveTask(bucket({ branch: 'fix/123-foo' }), { activeTask: null, patterns }), {
+    taskRef: null,
+    attributionMethod: 'none',
+  });
+});
+
+test('resolveTask: padrões desligados nunca dão branch', () => {
+  const off = compileServerPatterns({ ...DEFAULT_PATTERNS, enabled: false });
+  assert.equal(resolveTask(bucket(), { activeTask: null, patterns: off }).attributionMethod, 'none');
 });

@@ -15,11 +15,23 @@ export function hourIso(hourStart: number): string {
 
 const MAX_KEY = 200;
 
-export function rowKey(tool: string, hash: string, model: string, hourStart: number, branch: string | null): string {
+/**
+ * `repo` é o sufixo novo da chave (AGT3). `undefined` mantém a chave antiga,
+ * sem sufixo, das horas anteriores a `key_repo_from`.
+ */
+export function rowKey(
+  tool: string,
+  hash: string,
+  model: string,
+  hourStart: number,
+  branch: string | null,
+  repo?: string | null,
+): string {
   const modelSafe = model.replace(/[^A-Za-z0-9:._@/#-]/g, '_');
   const br = branch ? sha256Hex(branch).slice(0, 6) : '-';
   const head = `${tool}:${hash}:`;
-  const tail = `:${hourIso(hourStart)}:${br}`;
+  const rp = repo === undefined ? '' : `:${repo ? sha256Hex(repo).slice(0, 6) : '-'}`;
+  const tail = `:${hourIso(hourStart)}:${br}${rp}`;
   const room = Math.max(0, MAX_KEY - head.length - tail.length);
   return `${head}${modelSafe.slice(0, room)}${tail}`;
 }
@@ -38,7 +50,7 @@ export interface RowContext {
 export function buildRow(bucket: Bucket, ctx: RowContext): PayloadRow {
   const hash = sessionHash(ctx.salt, bucket.tool, bucket.sessionId);
   return {
-    key: rowKey(bucket.tool, hash, bucket.model, bucket.hourStart, bucket.branch),
+    key: rowKey(bucket.tool, hash, bucket.model, bucket.hourStart, bucket.branch, bucket.keyRepo ? bucket.repo : undefined),
     tool: bucket.tool,
     sessionHash: hash,
     model: bucket.model,
@@ -57,12 +69,13 @@ export function buildRow(bucket: Bucket, ctx: RowContext): PayloadRow {
     branch: bucket.branch,
     taskRef: ctx.taskRef,
     attributionMethod: ctx.attributionMethod,
+    branchApproximate: bucket.branchApprox,
   };
 }
 
 export const ALLOWED_ROW_FIELDS: readonly string[] = [
   'key', 'tool', 'sessionHash', 'model', 'hour', 'day', 'tokens', 'interactions',
-  'origin', 'repo', 'branch', 'taskRef', 'attributionMethod',
+  'origin', 'repo', 'branch', 'taskRef', 'attributionMethod', 'branchApproximate',
 ];
 export const ALLOWED_TOKEN_FIELDS: readonly (keyof TokenCounts)[] = [
   'input', 'output', 'cacheRead', 'cacheWrite', 'thinking',
@@ -111,6 +124,7 @@ export function guardRows(rows: readonly unknown[]): string[] {
     if (typeof row.repo === 'string' && !REPO_SHAPE.test(row.repo)) {
       out.push(`${w}.repo: não tem a forma host/caminho`);
     }
+    if (typeof row.branchApproximate !== 'boolean') out.push(`${w}.branchApproximate: deve ser booleano`);
     if (!Number.isInteger(row.interactions) || (row.interactions as number) < 0) {
       out.push(`${w}.interactions: deve ser inteiro >= 0`);
     }

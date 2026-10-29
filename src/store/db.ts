@@ -151,6 +151,17 @@ export class Store {
         this.db.exec('PRAGMA user_version=1');
       });
     }
+    if (v < 2) {
+      // v2: o repo entra na chave. Horas já no outbox (qualquer status) ficam com a chave
+      // antiga; só a partir da hora seguinte à maior delas vale a nova. Base nova: 0.
+      this.tx(() => {
+        const r = this.db.prepare(`SELECT MAX(json_extract(row_json, '$.hour')) AS h FROM outbox`).get() as Row;
+        const h = typeof r.h === 'string' ? Date.parse(r.h) : NaN;
+        const from = Number.isFinite(h) ? (Math.floor(h / HOUR_MS) + 1) * HOUR_MS : 0;
+        this.setMeta('key_repo_from', String(from));
+        this.db.exec('PRAGMA user_version=2');
+      });
+    }
   }
 
   private tx<T>(fn: () => T): T {
@@ -188,19 +199,31 @@ export class Store {
 
   // ---- events ----
 
-  /** Dedupe global: a mesma (tool, eventKey) fica com o maior `output`; empate mantém. */
+  /**
+   * Dedupe global: a mesma (tool, eventKey) fica com o maior `output`; empate mantém.
+   * O `ts` é sempre o menor visto, para a mensagem ficar na hora em que começou.
+   * Evento sem token nenhum (entrada, saída e cache zerados) não é guardado.
+   */
   upsertEvents(events: ResolvedEvent[]): void {
     const st = this.db.prepare(
       `INSERT INTO events(tool, event_key, session_id, ts, model, repo, branch, branch_approx, input, output, cache_read, cache_write, thinking)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(tool, event_key) DO UPDATE SET
-         session_id=excluded.session_id, ts=excluded.ts, model=excluded.model, repo=excluded.repo,
-         branch=excluded.branch, branch_approx=excluded.branch_approx, input=excluded.input,
-         output=excluded.output, cache_read=excluded.cache_read, cache_write=excluded.cache_write,
-         thinking=excluded.thinking
-       WHERE excluded.output > events.output`,
+         ts=MIN(events.ts, excluded.ts),
+         session_id=CASE WHEN excluded.output > events.output THEN excluded.session_id ELSE events.session_id END,
+         model=CASE WHEN excluded.output > events.output THEN excluded.model ELSE events.model END,
+         repo=CASE WHEN excluded.output > events.output THEN excluded.repo ELSE events.repo END,
+         branch=CASE WHEN excluded.output > events.output THEN excluded.branch ELSE events.branch END,
+         branch_approx=CASE WHEN excluded.output > events.output THEN excluded.branch_approx ELSE events.branch_approx END,
+         input=CASE WHEN excluded.output > events.output THEN excluded.input ELSE events.input END,
+         output=CASE WHEN excluded.output > events.output THEN excluded.output ELSE events.output END,
+         cache_read=CASE WHEN excluded.output > events.output THEN excluded.cache_read ELSE events.cache_read END,
+         cache_write=CASE WHEN excluded.output > events.output THEN excluded.cache_write ELSE events.cache_write END,
+         thinking=CASE WHEN excluded.output > events.output THEN excluded.thinking ELSE events.thinking END`,
     );
     for (const e of events) {
+      const t = e.tokens;
+      if (t.input + t.output + t.cacheRead + t.cacheWrite === 0) continue;
       st.run(
         e.tool,
         e.eventKey,
@@ -236,12 +259,12 @@ export class Store {
   }
 
   /**
-   * Um bucket por (ferramenta, sessão, modelo, hora, branch), o mesmo recorte da
-   * chave da linha no contrato. A chave não tem repo: uma sessão que mexe em dois
-   * repositórios na mesma hora soma tudo num bucket, e o `repo` é o que teve mais
-   * chamadas (empate: o primeiro em ordem alfabética, nulo por último).
+   * Um bucket por (ferramenta, sessão, modelo, hora, branch, repo). As horas
+   * anteriores a `key_repo_from` seguem o formato antigo (sem repo na chave, uma
+   * linha por hora com o repo de mais chamadas) para a chave já enviada não mudar.
    */
   bucketsSince(tsMs: number, timezone: string): Bucket[] {
+    const keyRepoFrom = Number(this.getMeta('key_repo_from') ?? 0);
     const rows = this.db
       .prepare(
         `SELECT tool, session_id, model, (ts / ${HOUR_MS}) * ${HOUR_MS} AS hour_start, repo, branch,
@@ -256,8 +279,10 @@ export class Store {
     const out = new Map<string, Bucket & { repoN: number }>();
     for (const r of rows) {
       const hourStart = Number(r.hour_start);
+      const keyRepo = hourStart >= keyRepoFrom;
       const branch = (r.branch as string | null) ?? null;
-      const id = JSON.stringify([r.tool, r.session_id, r.model, hourStart, branch]);
+      const repo = (r.repo as string | null) ?? null;
+      const id = JSON.stringify([r.tool, r.session_id, r.model, hourStart, branch, keyRepo ? repo : 0]);
       const n = Number(r.n);
       const cur = out.get(id);
       if (!cur) {
@@ -267,10 +292,11 @@ export class Store {
           model: r.model as string,
           hourStart,
           day: localDayOf(hourStart, timezone),
-          repo: (r.repo as string | null) ?? null,
+          repo,
           repoN: n,
           branch,
           branchApprox: Number(r.approx) === 1,
+          keyRepo,
           tokens: {
             input: Number(r.input),
             output: Number(r.output),
@@ -283,7 +309,7 @@ export class Store {
         continue;
       }
       if (n > cur.repoN) {
-        cur.repo = (r.repo as string | null) ?? null;
+        cur.repo = repo;
         cur.repoN = n;
       }
       cur.branchApprox ||= Number(r.approx) === 1;

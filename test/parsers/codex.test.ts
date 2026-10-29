@@ -4,17 +4,17 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { zstdCompressSync } from 'node:zlib';
-import { codexParser } from '../../src/parsers/codex.js';
+import { codexParser, parseCodexLines } from '../../src/parsers/codex.js';
 import { parsers } from '../../src/parsers/index.js';
 
 const FIX = resolve(process.cwd(), 'test', 'fixtures', 'codex', '2026', '10', '29');
 const TC = join(FIX, 'rollout-2026-10-29T10-00-00-abc.jsonl');
 const REC = join(FIX, 'rollout-2026-10-29T12-00-00-rec.jsonl');
 
-test('index exporta os dois parsers', () => {
+test('index exporta os parsers de todas as IAs', () => {
   assert.deepEqual(
     parsers.map((p) => p.tool),
-    ['claude-code', 'codex'],
+    ['claude-code', 'codex', 'gemini-cli', 'opencode', 'kilo', 'cline'],
   );
 });
 
@@ -126,4 +126,38 @@ test('token_count lido antes do primeiro token_usage_record nao conta duas vezes
   const out = [...a.events, ...b.events].reduce((s, e) => s + e.tokens.output, 0);
   assert.equal(out, 30);
   assert.deepEqual(b.events.map((e) => e.eventKey), ['r2']);
+});
+
+const tc = (ts: string, u: Record<string, number>): string =>
+  JSON.stringify({ timestamp: ts, type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: u } } });
+const META = JSON.stringify({ timestamp: '2026-10-29T10:00:00.000Z', type: 'session_meta', payload: { id: 'vs-1', cwd: '/w' } });
+
+test('token_count de histórico restaurado (componentes zerados, só total_tokens) não gera evento', () => {
+  const zero = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0, total_tokens: 183977 };
+  const real = { input_tokens: 500, cached_input_tokens: 100, output_tokens: 30, reasoning_output_tokens: 5, total_tokens: 530 };
+  const r = parseCodexLines([META, tc('2026-10-29T10:00:01.000Z', zero), tc('2026-10-29T10:00:02.000Z', real)], 'fb', undefined);
+  assert.equal(r.events.length, 1);
+  assert.deepEqual(r.events[0]!.tokens, { input: 400, output: 30, cacheRead: 100, cacheWrite: 0, thinking: 5 });
+});
+
+test('token_count em que só o total_tokens muda não gera evento', () => {
+  const a = { input_tokens: 500, cached_input_tokens: 100, output_tokens: 30, reasoning_output_tokens: 5, total_tokens: 530 };
+  const r1 = parseCodexLines([META, tc('2026-10-29T10:00:01.000Z', a)], 'fb', undefined);
+  assert.equal(r1.events.length, 1);
+  const r2 = parseCodexLines([tc('2026-10-29T10:00:02.000Z', { ...a, total_tokens: 90000 })], 'fb', r1.state);
+  assert.equal(r2.events.length, 0);
+  // Zerado no meio não perde a base: o próximo real é diferença do anterior real.
+  const zero = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0, total_tokens: 183977 };
+  const more = { ...a, input_tokens: 700, output_tokens: 40, total_tokens: 740 };
+  const r3 = parseCodexLines([tc('2026-10-29T10:00:03.000Z', zero), tc('2026-10-29T10:00:04.000Z', more)], 'fb', r2.state);
+  assert.equal(r3.events.length, 1);
+  assert.deepEqual(r3.events[0]!.tokens, { input: 200, output: 10, cacheRead: 0, cacheWrite: 0, thinking: 0 });
+});
+
+test('componente menor que o anterior é recomeço: o delta é o total atual', () => {
+  const a = { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 100, reasoning_output_tokens: 0, total_tokens: 1100 };
+  const b = { input_tokens: 50, cached_input_tokens: 0, output_tokens: 200, reasoning_output_tokens: 0, total_tokens: 250 };
+  const r = parseCodexLines([META, tc('2026-10-29T10:00:01.000Z', a), tc('2026-10-29T10:00:02.000Z', b)], 'fb', undefined);
+  assert.equal(r.events.length, 2);
+  assert.deepEqual(r.events[1]!.tokens, { input: 50, output: 200, cacheRead: 0, cacheWrite: 0, thinking: 0 });
 });

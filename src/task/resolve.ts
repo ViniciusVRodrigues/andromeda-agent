@@ -45,7 +45,8 @@ export function resolveTask(
   if (t && bucket.hourStart + HOUR_LAST_MS >= t.since && (t.repo === null || t.repo === bucket.repo)) {
     return { taskRef: t.taskRef, attributionMethod: 'explicit' };
   }
-  const ref = taskRefFromBranch(bucket.branch, ctx.patterns);
-  if (ref) return { taskRef: ref, attributionMethod: 'branch' };
+  // O taskRef da linha é sempre explícito para o servidor (sem a checagem da sprint).
+  // Da branch o agente só informa o método; quem resolve é o servidor.
+  if (taskRefFromBranch(bucket.branch, ctx.patterns)) return { taskRef: null, attributionMethod: 'branch' };
   return { taskRef: null, attributionMethod: 'none' };
 }

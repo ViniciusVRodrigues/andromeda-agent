@@ -2,7 +2,7 @@ import type { PayloadRow } from '../src/types.js';
 import { keysDigest } from '../src/sync/reconcile.js';
 import { json, startServer, type FakeServer, type Seen } from './client/fake-server.js';
 
-const ALLOWED = ['key', 'tool', 'sessionHash', 'model', 'hour', 'day', 'tokens', 'interactions', 'origin', 'repo', 'branch', 'taskRef', 'attributionMethod'];
+const ALLOWED = ['key', 'tool', 'sessionHash', 'model', 'hour', 'day', 'tokens', 'interactions', 'origin', 'repo', 'branch', 'taskRef', 'attributionMethod', 'branchApproximate'];
 
 export interface E2eServer extends FakeServer {
   rows: Map<string, PayloadRow>;
@@ -117,6 +117,13 @@ export async function startE2eServer(): Promise<E2eServer> {
     if (req.method === 'DELETE' && path === '/agent/v1/active-task') {
       res.writeHead(204);
       return void res.end();
+    }
+    if (req.method === 'GET' && path === '/agent/v1/work-item-patterns') {
+      return json(res, 200, {
+        enabled: true,
+        updatedAt: null,
+        patterns: [{ regex: '(?i)\\QAB#\\E(\\d+)(?!\\d)', preset: 'AB_HASH', portable: { source: 'AB#(\\d+)(?!\\d)', flags: 'i' } }],
+      });
     }
     if (req.method === 'GET' && path === '/agent/v1/tasks') {
       return json(res, 200, { items: [{ workItemId: 'w-9', ref: 'AB#9', externalId: '9', title: 'Corrigir login', type: 'Task', sprintName: 'Sprint 1' }] });

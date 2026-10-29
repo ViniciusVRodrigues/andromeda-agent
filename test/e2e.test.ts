@@ -11,7 +11,7 @@ import type { PayloadRow, TokenCounts } from '../src/types.js';
 import { claudeLine, codexCount, codexMeta, HOUR, makeCtx, makeSandbox, writeText, writeZst } from './agent/helpers.js';
 import { startE2eServer } from './e2e-server.js';
 
-const ALLOWED = ['key', 'tool', 'sessionHash', 'model', 'hour', 'day', 'tokens', 'interactions', 'origin', 'repo', 'branch', 'taskRef', 'attributionMethod'];
+const ALLOWED = ['key', 'tool', 'sessionHash', 'model', 'hour', 'day', 'tokens', 'interactions', 'origin', 'repo', 'branch', 'taskRef', 'attributionMethod', 'branchApproximate'];
 
 function sum(rows: PayloadRow[]): TokenCounts & { interactions: number } {
   const t = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, thinking: 0, interactions: 0 };
@@ -86,8 +86,9 @@ test('ponta a ponta: parear, coletar, enviar só o delta, nada vaza, dry-run e t
     }
     const ab = sent.find((r) => r.branch === 'feature/AB#123-x');
     assert.ok(ab);
-    assert.equal(ab.taskRef, 'AB#123');
+    assert.equal(ab.taskRef, null, 'da branch o agente não manda taskRef');
     assert.equal(ab.attributionMethod, 'branch');
+    assert.equal(ab.branchApproximate, false);
     assert.equal(ab.interactions, 2);
     assert.equal(ab.tokens.output, 56);
     for (const r of sent.filter((x) => x !== ab)) {

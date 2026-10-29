@@ -1,58 +1,58 @@
-export const MAX_PATTERNS = 10;
-export const MAX_PATTERN_LENGTH = 200;
-const MAX_BRANCH_LENGTH = 255;
+import type { WorkItemPatternsResponse } from '../types.js';
 
-/**
- * Padrões default. A ordem difere da listagem do servidor em um ponto: o de
- * chave Jira vem antes do genérico, senão `feat/PROJ-88_foo` casaria `88`.
- */
-export const DEFAULT_PATTERNS: string[] = [
-  'AB#(\\d+)',
-  '([A-Z][A-Z0-9]{1,9}-\\d+)',
-  '(?i)(?:^|/)(?:[a-z]+[-_])?(\\d{2,7})(?=[-_/.]|$)',
-];
+const MAX_BRANCH_LENGTH = 255;
+const ALLOWED_FLAGS = new Set(['i', 'm', 's', 'u']);
+
+/** Default do servidor (design 14.2): só `AB#<n>`, para o vínculo de hoje não mudar. */
+export const DEFAULT_PATTERNS: WorkItemPatternsResponse = {
+  enabled: true,
+  updatedAt: null,
+  patterns: [
+    {
+      regex: '(?i)\\QAB#\\E(\\d+)(?!\\d)',
+      preset: 'AB_HASH',
+      portable: { source: 'AB#(\\d+)(?!\\d)', flags: 'i' },
+    },
+  ],
+};
 
 export interface CompiledPattern {
-  source: string;
-  regex: RegExp;
-  /** true no padrão `AB#(\d+)`: o grupo ganha o prefixo `AB#`. */
-  abPrefix: boolean;
+  preset: string;
+  /** null quando o padrão não tem versão portátil: só o servidor decide. */
+  regex: RegExp | null;
+  /** true: sem conversão segura para JavaScript, o match local pula o padrão. */
+  serverOnly: boolean;
 }
 
-export function compilePatterns(list: string[]): CompiledPattern[] {
-  if (list.length > MAX_PATTERNS) {
-    throw new Error(`Padrões demais: ${list.length} (máximo ${MAX_PATTERNS})`);
+function compileOne(p: WorkItemPatternsResponse['patterns'][number]): CompiledPattern {
+  const preset = typeof p.preset === 'string' ? p.preset : '';
+  const pt = p.portable;
+  if (!pt || typeof pt.source !== 'string' || typeof pt.flags !== 'string') return { preset, regex: null, serverOnly: true };
+  if ([...pt.flags].some((f) => !ALLOWED_FLAGS.has(f))) return { preset, regex: null, serverOnly: true };
+  try {
+    return { preset, regex: new RegExp(pt.source, pt.flags), serverOnly: false };
+  } catch {
+    return { preset, regex: null, serverOnly: true };
   }
-  return list.map((src, i) => {
-    if (src.length > MAX_PATTERN_LENGTH) {
-      throw new Error(`Padrão ${i} longo demais (máximo ${MAX_PATTERN_LENGTH} caracteres)`);
-    }
-    let body = src;
-    let flags = '';
-    if (body.startsWith('(?i)')) {
-      body = body.slice(4);
-      flags = 'i';
-    }
-    let regex: RegExp;
-    try {
-      regex = new RegExp(body, flags);
-    } catch (e) {
-      throw new Error(`Padrão ${i} inválido: ${(e as Error).message}`);
-    }
-    const groups = new RegExp(`${body}|`, flags).exec('')?.length ?? 1;
-    if (groups < 2) throw new Error(`Padrão ${i} sem grupo de captura`);
-    return { source: src, regex, abPrefix: body.startsWith('AB#(') };
-  });
 }
 
-/** Referência de tarefa na branch: grupo 1 do primeiro padrão que casa. */
+/**
+ * Compila a resposta do servidor sem reordenar. `enabled: false` não deixa
+ * nenhum padrão local: o passo da branch não roda no servidor.
+ */
+export function compileServerPatterns(resp: WorkItemPatternsResponse): CompiledPattern[] {
+  if (!resp.enabled) return [];
+  return (Array.isArray(resp.patterns) ? resp.patterns : []).map(compileOne);
+}
+
+/** Referência de tarefa na branch: grupo 1 do primeiro padrão que casa, na ordem recebida. */
 export function taskRefFromBranch(branch: string | null, patterns: CompiledPattern[]): string | null {
   if (!branch) return null;
   const b = branch.slice(0, MAX_BRANCH_LENGTH);
   for (const p of patterns) {
-    const m = p.regex.exec(b);
-    const g = m?.[1];
-    if (g) return p.abPrefix && /^\d+$/.test(g) ? `AB#${g}` : g;
+    if (p.serverOnly || !p.regex) continue;
+    const g = p.regex.exec(b)?.[1];
+    if (g) return p.preset === 'AB_HASH' && /^\d+$/.test(g) ? `AB#${g}` : g;
   }
   return null;
 }

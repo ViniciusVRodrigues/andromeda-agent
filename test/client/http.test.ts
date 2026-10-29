@@ -50,6 +50,7 @@ test('cada endpoint usa método, rota e headers certos e devolve o campo certo',
       return void res.end();
     }
     if (r.url === '/agent/v1/tasks') return json(res, 200, { items: [{ ref: 'R' }] });
+    if (r.url === '/agent/v1/work-item-patterns') return json(res, 200, { enabled: true, updatedAt: null, patterns: [{ regex: 'x', preset: 'AB_HASH', portable: null }] });
     json(res, 404, {});
   });
   const logs: string[] = [];
@@ -68,6 +69,7 @@ test('cada endpoint usa método, rota e headers certos e devolve o campo certo',
     const set = await api.setActiveTask({ taskRef: 'R', since: 's', day: '2026-10-01' });
     await api.clearActiveTask();
     const tasks = await api.listTasks();
+    const pats = await api.workItemPatterns();
     process.stdout.write = origOut;
     process.stderr.write = origErr;
 
@@ -76,6 +78,8 @@ test('cada endpoint usa método, rota e headers certos e devolve o campo certo',
     assert.deepEqual(keys, ['a', 'b']);
     assert.equal(set.retroactiveRows, 3);
     assert.equal(tasks.length, 1);
+    assert.equal(pats.enabled, true);
+    assert.equal(pats.patterns[0]!.portable, null);
     assert.deepEqual(
       srv.seen.map((s) => `${s.method} ${s.url}`),
       [
@@ -86,6 +90,7 @@ test('cada endpoint usa método, rota e headers certos e devolve o campo certo',
         'PUT /agent/v1/active-task',
         'DELETE /agent/v1/active-task',
         'GET /agent/v1/tasks',
+        'GET /agent/v1/work-item-patterns',
       ],
     );
     for (const s of srv.seen) {

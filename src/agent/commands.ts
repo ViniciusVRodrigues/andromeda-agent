@@ -3,12 +3,15 @@ import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import * as zlib from 'node:zlib';
 import { AGENT_VERSION, ApiError } from '../types.js';
-import type { AgentApi, LocalActiveTask, LogParser, ParserEnv, PayloadRow } from '../types.js';
+import type { AgentApi, LocalActiveTask, LogParser, ParserEnv, PayloadRow, ToolId } from '../types.js';
 import { Store, localDayOf } from '../store/db.js';
 import { stateDir as resolveStateDir } from '../paths.js';
 import { parsers as defaultParsers } from '../parsers/index.js';
 import { claudeRoot } from '../parsers/claude.js';
 import { codexRoot } from '../parsers/codex.js';
+import { clineRoots } from '../parsers/cline.js';
+import { geminiRoot } from '../parsers/gemini.js';
+import { kiloDbPath, opencodeDbPath } from '../parsers/opencode.js';
 import { createGit, type GitInfo } from '../task/git.js';
 import { FileCredentialStore, defaultCredentialStore, type CredentialStore } from '../auth/tokens.js';
 import { pollForToken, startPairing, validateServerUrl, type FetchLike } from '../client/device.js';
@@ -27,6 +30,8 @@ import {
   type ServiceStatus,
 } from '../service/index.js';
 import { createLogger } from '../log.js';
+import { currentPatterns, loadStoredPatterns, refreshPatterns } from '../task/server-patterns.js';
+import { taskRefFromBranch } from '../task/patterns.js';
 import { collect } from './collect.js';
 import { acquireLock, getState, runLoop, type AgentDeps } from './loop.js';
 
@@ -221,6 +226,8 @@ async function cmdTask(ctx: CliContext, args: string[]): Promise<number> {
   const store = openStore(ctx);
   try {
     store.setLocalActiveTask(task);
+    // Aproveita para renovar os padrões de branch (no máximo uma busca por hora).
+    await refreshPatterns(store, apiOf(ctx), now, createLogger(stateDirOf(ctx), ctx.now));
   } finally {
     store.close();
   }
@@ -434,6 +441,26 @@ async function safeServiceStatus(ctx: CliContext): Promise<ServiceStatus | null>
   }
 }
 
+/** Fonte dos padrões de branch e o que o servidor deve concluir da branch atual. */
+async function patternsStatus(ctx: CliContext, store: Store): Promise<void> {
+  const stored = loadStoredPatterns(store);
+  if (!stored) line(ctx, 'Padrões de branch: padrão default (AB#), o servidor ainda não respondeu');
+  else if (!stored.response.enabled) line(ctx, 'Padrões de branch: desligados pela organização');
+  else {
+    const mins = Math.max(0, Math.floor(((ctx.now ?? Date.now)() - stored.fetchedAt) / 60_000));
+    line(ctx, `Padrões de branch: ${stored.response.patterns.length} do servidor (atualizados há ${mins} min)`);
+  }
+  let branch: string | null = null;
+  try {
+    branch = await gitOf(ctx).currentBranch(ctx.cwd);
+  } catch {
+    branch = null;
+  }
+  if (!branch || branch === 'HEAD') return;
+  const ref = taskRefFromBranch(branch, currentPatterns(store));
+  line(ctx, `Branch atual: ${branch} → ${ref ? `o servidor deve concluir ${ref}` : 'nenhum padrão casa'}`);
+}
+
 async function cmdStatus(ctx: CliContext): Promise<number> {
   const creds = await credStoreOf(ctx).load().catch(() => null);
   line(ctx, creds ? `Pareado: sim, organização ${creds.organizationSlug}, servidor ${creds.serverUrl}` : 'Pareado: não');
@@ -452,6 +479,14 @@ async function cmdStatus(ctx: CliContext): Promise<number> {
       line(ctx, `Rejeitadas: ${st.rejected}`);
       line(ctx, `Dia mais antigo pendente: ${st.oldestPendingDay ?? 'nenhum'}`);
       line(ctx, `Tarefa ativa: ${task ? `${task.taskRef} desde ${fmtTime(task.since)}${task.repo ? ` (${task.repo})` : ''}` : 'nenhuma'}`);
+      if (task) {
+        const hours = Math.floor(((ctx.now ?? Date.now)() - task.since) / 3_600_000);
+        line(ctx, `Marcada há: ${hours} h`);
+        if (hours > 12) {
+          line(ctx, `Aviso: a tarefa ativa não expira sozinha (marcada há ${hours} h). Quando terminar, rode: andromeda-agent task --clear`);
+        }
+      }
+      await patternsStatus(ctx, store);
     } finally {
       store.close();
     }
@@ -511,14 +546,16 @@ async function cmdDoctor(ctx: CliContext): Promise<number> {
 
   const penv = parserEnv(ctx);
   for (const p of ctx.parsers ?? defaultParsers) {
-    const base = p.tool === 'claude-code' ? claudeRoot(penv) : p.tool === 'codex' ? codexRoot(penv) : p.tool;
+    const base = logRoot(p.tool, penv);
     let n = 0;
     try {
       n = (await p.discover(penv)).length;
     } catch {
       n = 0;
     }
-    add(n > 0 ? 'OK' : 'AVISO', `Logs de ${p.tool}: ${n} arquivo(s) em ${base}`);
+    // Claude e Codex são as IAs principais; as outras só aparecem como aviso se alguém as usa.
+    const main = p.tool === 'claude-code' || p.tool === 'codex';
+    add(n > 0 || !main ? 'OK' : 'AVISO', `Logs de ${p.tool}: ${n} arquivo(s) em ${base}`);
   }
 
   let creds = null;
@@ -615,5 +652,24 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
     }
     ctx.err(`erro: ${describeError(e)}\n`);
     return 1;
+  }
+}
+
+function logRoot(tool: ToolId, penv: ParserEnv): string {
+  switch (tool) {
+    case 'claude-code':
+      return claudeRoot(penv);
+    case 'codex':
+      return codexRoot(penv);
+    case 'gemini-cli':
+      return geminiRoot(penv);
+    case 'opencode':
+      return opencodeDbPath(penv);
+    case 'kilo':
+      return kiloDbPath(penv);
+    case 'cline':
+      return clineRoots(penv)[0] ?? tool;
+    default:
+      return tool;
   }
 }
