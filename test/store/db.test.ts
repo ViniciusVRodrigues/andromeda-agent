@@ -44,6 +44,27 @@ test('dedupe global: id repetido com output crescente e fora de ordem fica com o
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('buckets: mesma sessão, hora e branch em repositórios diferentes vira um bucket só', () => {
+  // A chave da linha (contrato) não tem repo: dois buckets por repo colidiriam e um sumiria.
+  const dir = tmp();
+  const s = Store.open(dir);
+  s.upsertEvents([
+    ev('a', 1000, 10, { repo: 'github.com/o/ms' }),
+    ev('b', 2000, 20, { repo: 'github.com/o/ui' }),
+    ev('c', 3000, 30, { repo: 'github.com/o/ui' }),
+    ev('d', 4000, 40, { repo: null, branchApprox: true }),
+  ]);
+  const b = s.bucketsSince(0, 'UTC');
+  assert.equal(b.length, 1);
+  assert.equal(b[0]!.interactions, 4);
+  assert.equal(b[0]!.tokens.output, 100);
+  assert.equal(b[0]!.tokens.cacheRead, 8);
+  assert.equal(b[0]!.repo, 'github.com/o/ui');
+  assert.equal(b[0]!.branchApprox, true);
+  s.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('salt estável entre aberturas e distinto entre bancos', () => {
   const d1 = tmp();
   const d2 = tmp();
