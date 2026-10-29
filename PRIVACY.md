@@ -6,9 +6,13 @@ Este documento diz o que o `andromeda-agent` lê, o que extrai e o que envia. O 
 
 - **Claude Code:** `~/.claude/projects/**/*.jsonl`, ou a pasta de `$CLAUDE_CONFIG_DIR` quando definida.
 - **Codex:** `~/.codex/sessions/**/rollout-*.jsonl` (e `.jsonl.zst`), ou a pasta de `$CODEX_HOME` quando definida.
+- **Gemini CLI:** `~/.gemini/tmp/*/chats/session-*.jsonl` (e o `.json` antigo), ou a pasta de `$GEMINI_CLI_HOME` quando definida, e o `.project_root` de cada projeto.
+- **opencode:** a base `opencode*.db` em `$OPENCODE_DATA_DIR`, `$XDG_DATA_HOME/opencode` ou `~/.local/share/opencode` (ou `$OPENCODE_DB`), aberta só para leitura.
+- **Kilo:** a base `kilo*.db` em `$XDG_DATA_HOME/kilo` ou `~/.local/share/kilo` (ou `$KILO_DB`), aberta só para leitura.
+- **Cline:** `tasks/*/ui_messages.json` e `task_metadata.json` na pasta da extensão (`globalStorage/saoudrizwan.claude-dev` do VS Code, Insiders, Cursor, VSCodium, Windsurf e Antigravity), ou `$CLINE_DATA_DIR`/`~/.cline/data`, e o `state/taskHistory.json` (só a pasta da tarefa).
 - **git**, na pasta da sessão: `git remote get-url origin`, a branch atual e o reflog.
 
-O agente só lê. Nunca altera a configuração nem os arquivos dessas ferramentas.
+O agente só lê. Nunca altera a configuração nem os arquivos dessas ferramentas. Esses arquivos também guardam a conversa; dela o agente só pega os números de tokens, o modelo, o horário e os ids, e descarta o resto (no Cline, o campo `request`, que traz o prompt, nem é guardado).
 
 ## O que extrai
 

@@ -3,12 +3,15 @@ import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import * as zlib from 'node:zlib';
 import { AGENT_VERSION, ApiError } from '../types.js';
-import type { AgentApi, LocalActiveTask, LogParser, ParserEnv, PayloadRow } from '../types.js';
+import type { AgentApi, LocalActiveTask, LogParser, ParserEnv, PayloadRow, ToolId } from '../types.js';
 import { Store, localDayOf } from '../store/db.js';
 import { stateDir as resolveStateDir } from '../paths.js';
 import { parsers as defaultParsers } from '../parsers/index.js';
 import { claudeRoot } from '../parsers/claude.js';
 import { codexRoot } from '../parsers/codex.js';
+import { clineRoots } from '../parsers/cline.js';
+import { geminiRoot } from '../parsers/gemini.js';
+import { kiloDbPath, opencodeDbPath } from '../parsers/opencode.js';
 import { createGit, type GitInfo } from '../task/git.js';
 import { FileCredentialStore, defaultCredentialStore, type CredentialStore } from '../auth/tokens.js';
 import { pollForToken, startPairing, validateServerUrl, type FetchLike } from '../client/device.js';
@@ -543,14 +546,16 @@ async function cmdDoctor(ctx: CliContext): Promise<number> {
 
   const penv = parserEnv(ctx);
   for (const p of ctx.parsers ?? defaultParsers) {
-    const base = p.tool === 'claude-code' ? claudeRoot(penv) : p.tool === 'codex' ? codexRoot(penv) : p.tool;
+    const base = logRoot(p.tool, penv);
     let n = 0;
     try {
       n = (await p.discover(penv)).length;
     } catch {
       n = 0;
     }
-    add(n > 0 ? 'OK' : 'AVISO', `Logs de ${p.tool}: ${n} arquivo(s) em ${base}`);
+    // Claude e Codex são as IAs principais; as outras só aparecem como aviso se alguém as usa.
+    const main = p.tool === 'claude-code' || p.tool === 'codex';
+    add(n > 0 || !main ? 'OK' : 'AVISO', `Logs de ${p.tool}: ${n} arquivo(s) em ${base}`);
   }
 
   let creds = null;
@@ -647,5 +652,24 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
     }
     ctx.err(`erro: ${describeError(e)}\n`);
     return 1;
+  }
+}
+
+function logRoot(tool: ToolId, penv: ParserEnv): string {
+  switch (tool) {
+    case 'claude-code':
+      return claudeRoot(penv);
+    case 'codex':
+      return codexRoot(penv);
+    case 'gemini-cli':
+      return geminiRoot(penv);
+    case 'opencode':
+      return opencodeDbPath(penv);
+    case 'kilo':
+      return kiloDbPath(penv);
+    case 'cline':
+      return clineRoots(penv)[0] ?? tool;
+    default:
+      return tool;
   }
 }

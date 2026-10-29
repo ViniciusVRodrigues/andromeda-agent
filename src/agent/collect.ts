@@ -55,7 +55,7 @@ export async function collect(
     res.files += files.length;
     for (const file of files) {
       try {
-        const st = await stat(file);
+        const st = await statWithWal(file);
         const cur = store.getCursor(file);
         const zst = file.endsWith('.zst');
         // `.zst` guarda offset descomprimido, então só o tamanho do arquivo diz se ele encolheu.
@@ -102,6 +102,18 @@ export async function collect(
     res.rows = safe.length;
   }
   return res;
+}
+
+/** Bases SQLite gravam no `-wal`: o `.db` pode nao mudar, entao tamanho e mtime somam o `-wal` quando existe. */
+async function statWithWal(file: string): Promise<{ size: number; mtimeMs: number }> {
+  const st = await stat(file);
+  if (!file.endsWith('.db')) return st;
+  try {
+    const w = await stat(`${file}-wal`);
+    return { size: st.size + w.size, mtimeMs: Math.max(st.mtimeMs, w.mtimeMs) };
+  } catch {
+    return st;
+  }
 }
 
 function errName(e: unknown): string {

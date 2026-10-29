@@ -1,0 +1,3 @@
+{"sessionId":"s-0002","projectHash":"3f2a","startTime":"2026-10-21T09:00:00.000Z","lastUpdated":"2026-10-21T09:05:00.000Z","messages":[
+{"id":"a-1","timestamp":"2026-10-21T09:00:01.000Z","type":"user","content":"q"},
+{"id":"a-2","timestamp":"2026-10-21T09:00:05.000Z","type":"gemini","content":"r","model":"gemini-2.5-flash","tokens":{"input":500,"output":100,"cached":0,"thoughts":40,"tool":0,"total":640}}]}

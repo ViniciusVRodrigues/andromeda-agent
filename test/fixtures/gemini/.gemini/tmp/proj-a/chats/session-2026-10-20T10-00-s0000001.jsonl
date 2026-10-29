@@ -1,0 +1,9 @@
+{"sessionId":"s-0001","projectHash":"3f2a","startTime":"2026-10-20T10:00:00.000Z","lastUpdated":"2026-10-20T10:00:00.000Z","kind":"main"}
+{"id":"m-001","timestamp":"2026-10-20T10:00:01.000Z","type":"user","content":[{"text":"x"}]}
+{"id":"m-002","timestamp":"2026-10-20T10:00:05.000Z","type":"gemini","content":"y","model":"gemini-3-pro","tokens":{"input":1200,"output":300,"cached":800,"thoughts":150,"tool":0,"total":1650}}
+{"id":"m-002","timestamp":"2026-10-20T10:00:05.000Z","type":"gemini","content":"y","model":"gemini-3-pro","tokens":{"input":1200,"output":300,"cached":800,"thoughts":150,"tool":0,"total":1650},"toolCalls":[]}
+{"$set":{"lastUpdated":"2026-10-20T10:00:06.000Z"}}
+{"id":"m-003","timestamp":"2026-10-20T10:01:00.000Z","type":"gemini","content":"z","tokens":{"input":100,"output":50,"cached":0,"thoughts":0,"tool":0,"total":150}}
+{"$patch":{"id":"m-003","content":"zz"}}
+{"id":"m-004","timestamp":"2026-10-20T10:02:00.000Z","type":"gemini","content":"w","tokens":null}
+{"$rewindTo":"m-003"}

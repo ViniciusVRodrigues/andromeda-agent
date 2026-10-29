@@ -35,9 +35,9 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 
 ## IAs suportadas
 
-Na v1: **Claude Code** e **Codex**.
+**Claude Code**, **Codex**, **Gemini CLI**, **opencode** (1.x), **Kilo** (7.x) e **Cline** (extensão clássica, `ui_messages.json`).
 
-Próximas: Gemini CLI, opencode, Copilot CLI e VS Code, Cline, Roo e Kilo.
+Ainda não: Roo Code (não grava o modelo de cada requisição), Copilot no VS Code (conta a menos no modo agente e não separa o cache), Copilot CLI, opencode 2.x e Cline 4.x (formato sem confirmação). O `andromeda-agent doctor` mostra quantos logs de cada IA ele achou.
 
 O agente só **lê** os arquivos dessas ferramentas. Nunca altera a configuração delas.
 
@@ -57,7 +57,7 @@ Guarda o cursor de leitura, a fila local de envios pendentes e o sal da máquina
 |---|---|
 | `ANDROMEDA_AGENT_HOME` | Troca a pasta de estado (banco local, log, credenciais em arquivo). |
 | `ANDROMEDA_AGENT_CREDENTIAL_STORE=file` | Guarda as credenciais em arquivo restrito ao usuário em vez do cofre do sistema. |
-| `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | Os mesmos das próprias IAs: o agente lê os logs de onde elas gravam. |
+| `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME`, `OPENCODE_DATA_DIR`, `OPENCODE_DB`, `KILO_DB`, `CLINE_DATA_DIR` | Os mesmos das próprias IAs: o agente lê os logs de onde elas gravam. |
 
 ## Sobreviver a reinício
 

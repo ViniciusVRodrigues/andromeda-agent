@@ -11,10 +11,10 @@ const FIX = resolve(process.cwd(), 'test', 'fixtures', 'codex', '2026', '10', '2
 const TC = join(FIX, 'rollout-2026-10-29T10-00-00-abc.jsonl');
 const REC = join(FIX, 'rollout-2026-10-29T12-00-00-rec.jsonl');
 
-test('index exporta os dois parsers', () => {
+test('index exporta os parsers de todas as IAs', () => {
   assert.deepEqual(
     parsers.map((p) => p.tool),
-    ['claude-code', 'codex'],
+    ['claude-code', 'codex', 'gemini-cli', 'opencode', 'kilo', 'cline'],
   );
 });
 
