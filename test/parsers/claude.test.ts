@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { claudeParser, dedupeByMaxOutput } from '../../src/parsers/claude.js';
+import { claudeParser, dedupeByMaxOutput, parseClaudeLine } from '../../src/parsers/claude.js';
 import type { UsageEvent } from '../../src/types.js';
 
 const FIX = resolve(process.cwd(), 'test', 'fixtures', 'claude');
@@ -98,4 +98,41 @@ test('dedupeByMaxOutput: id repetido, streaming, ultimo nao e o maior, outros ar
   assert.equal(m.get('a'), 8);
   assert.equal(m.get('b'), 1);
   assert.equal(m.get('c'), 3);
+});
+
+test('parseClaudeLine: iteração advisor_message vira evento próprio com o modelo do conselheiro', () => {
+  const line = JSON.stringify({
+    type: 'assistant',
+    timestamp: '2026-10-04T12:00:00.000Z',
+    sessionId: 's1',
+    gitBranch: 'feat/x',
+    message: {
+      id: 'msg_1',
+      model: 'claude-opus-5-5',
+      usage: {
+        input_tokens: 4,
+        output_tokens: 539,
+        cache_read_input_tokens: 519033,
+        cache_creation_input_tokens: 2112,
+        output_tokens_details: { thinking_tokens: 108 },
+        iterations: [
+          { type: 'message', input_tokens: 2, output_tokens: 135, cache_read_input_tokens: 259259, cache_creation_input_tokens: 515 },
+          { type: 'advisor_message', model: 'claude-fable-5-1', input_tokens: 264414, output_tokens: 10183, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          { type: 'message', input_tokens: 2, output_tokens: 404, cache_read_input_tokens: 259774, cache_creation_input_tokens: 1597 },
+          { type: 'advisor_message', input_tokens: 9, output_tokens: 9 },
+        ],
+      },
+    },
+  });
+  const evs = parseClaudeLine(line);
+  assert.equal(evs.length, 2);
+  assert.deepEqual(
+    evs.map((e) => [e.eventKey, e.model, e.tokens.input, e.tokens.output, e.tokens.cacheRead, e.branch]),
+    [
+      ['msg_1', 'claude-opus-5-5', 4, 539, 519033, 'feat/x'],
+      ['msg_1:advisor:0', 'claude-fable-5-1', 264414, 10183, 0, 'feat/x'],
+    ],
+  );
+  assert.equal(evs[1]!.sessionId, 's1');
+  assert.equal(parseClaudeLine('{"type":"user","message":{"usage":{}}}').length, 0);
 });
