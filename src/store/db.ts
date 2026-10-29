@@ -235,6 +235,12 @@ export class Store {
     return Number(this.db.prepare('DELETE FROM events WHERE ts < ?').run(olderThanMs).changes);
   }
 
+  /**
+   * Um bucket por (ferramenta, sessão, modelo, hora, branch), o mesmo recorte da
+   * chave da linha no contrato. A chave não tem repo: uma sessão que mexe em dois
+   * repositórios na mesma hora soma tudo num bucket, e o `repo` é o que teve mais
+   * chamadas (empate: o primeiro em ordem alfabética, nulo por último).
+   */
   bucketsSince(tsMs: number, timezone: string): Bucket[] {
     const rows = this.db
       .prepare(
@@ -244,27 +250,51 @@ export class Store {
                 COUNT(*) AS n
          FROM events WHERE ts >= ?
          GROUP BY tool, session_id, model, hour_start, repo, branch
-         ORDER BY hour_start, tool, session_id, model`,
+         ORDER BY hour_start, tool, session_id, model, branch, repo IS NULL, repo`,
       )
       .all(tsMs) as Row[];
-    return rows.map((r) => ({
-      tool: r.tool as ToolId,
-      sessionId: r.session_id as string,
-      model: r.model as string,
-      hourStart: Number(r.hour_start),
-      day: localDayOf(Number(r.hour_start), timezone),
-      repo: (r.repo as string | null) ?? null,
-      branch: (r.branch as string | null) ?? null,
-      branchApprox: Number(r.approx) === 1,
-      tokens: {
-        input: Number(r.input),
-        output: Number(r.output),
-        cacheRead: Number(r.cache_read),
-        cacheWrite: Number(r.cache_write),
-        thinking: Number(r.thinking),
-      },
-      interactions: Number(r.n),
-    }));
+    const out = new Map<string, Bucket & { repoN: number }>();
+    for (const r of rows) {
+      const hourStart = Number(r.hour_start);
+      const branch = (r.branch as string | null) ?? null;
+      const id = JSON.stringify([r.tool, r.session_id, r.model, hourStart, branch]);
+      const n = Number(r.n);
+      const cur = out.get(id);
+      if (!cur) {
+        out.set(id, {
+          tool: r.tool as ToolId,
+          sessionId: r.session_id as string,
+          model: r.model as string,
+          hourStart,
+          day: localDayOf(hourStart, timezone),
+          repo: (r.repo as string | null) ?? null,
+          repoN: n,
+          branch,
+          branchApprox: Number(r.approx) === 1,
+          tokens: {
+            input: Number(r.input),
+            output: Number(r.output),
+            cacheRead: Number(r.cache_read),
+            cacheWrite: Number(r.cache_write),
+            thinking: Number(r.thinking),
+          },
+          interactions: n,
+        });
+        continue;
+      }
+      if (n > cur.repoN) {
+        cur.repo = (r.repo as string | null) ?? null;
+        cur.repoN = n;
+      }
+      cur.branchApprox ||= Number(r.approx) === 1;
+      cur.tokens.input += Number(r.input);
+      cur.tokens.output += Number(r.output);
+      cur.tokens.cacheRead += Number(r.cache_read);
+      cur.tokens.cacheWrite += Number(r.cache_write);
+      cur.tokens.thinking += Number(r.thinking);
+      cur.interactions += n;
+    }
+    return [...out.values()].map(({ repoN: _repoN, ...b }) => b);
   }
 
   // ---- meta ----
@@ -437,13 +467,14 @@ export class Store {
 
   // ---- lote em curso (sender) ----
 
-  getInflight(): { batchId: string; keys: string[] } | null {
+  /** `digest` é o SHA-256 das linhas enviadas; ausente em lotes gravados por versão antiga. */
+  getInflight(): { batchId: string; keys: string[]; digest?: string } | null {
     const v = this.getMeta('inflight');
-    return v ? (JSON.parse(v) as { batchId: string; keys: string[] }) : null;
+    return v ? (JSON.parse(v) as { batchId: string; keys: string[]; digest?: string }) : null;
   }
 
-  setInflight(batchId: string, keys: string[]): void {
-    this.setMeta('inflight', JSON.stringify({ batchId, keys }));
+  setInflight(batchId: string, keys: string[], digest: string): void {
+    this.setMeta('inflight', JSON.stringify({ batchId, keys, digest }));
   }
 
   clearInflight(): void {

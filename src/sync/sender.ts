@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ApiError } from '../types.js';
 import type { AgentApi, PayloadRow } from '../types.js';
 import type { OutboxItem, Store } from '../store/db.js';
@@ -25,6 +25,10 @@ export interface SendSummary {
 
 type Flow = 'ok' | 'stop';
 
+function rowsDigest(rows: PayloadRow[]): string {
+  return createHash('sha256').update(JSON.stringify(rows)).digest('hex');
+}
+
 export async function sendPending(store: Store, api: AgentApi, opts: SendOptions): Promise<SendSummary> {
   const batchSize = Math.min(opts.batchSize ?? 500, 500);
   const maxBatches = opts.maxBatches ?? Number.POSITIVE_INFINITY;
@@ -38,7 +42,7 @@ export async function sendPending(store: Store, api: AgentApi, opts: SendOptions
     const keys = items.map((i) => i.key);
     const rows = items.map((i) => i.row);
     for (const k of keys) touched.add(k);
-    store.setInflight(batchId, keys);
+    store.setInflight(batchId, keys, rowsDigest(rows));
     let resp;
     try {
       resp = await api.uploadUsage(batchId, opts.timezone, rows);
@@ -96,7 +100,10 @@ export async function sendPending(store: Store, api: AgentApi, opts: SendOptions
     if (inflight) {
       const items = store.pendingByKeys(inflight.keys, clock());
       if (items.length > 0) {
-        if ((await sendChunk(items, inflight.batchId)) === 'stop') break;
+        // O servidor responde um batchId repetido com a resposta guardada, sem ler
+        // o corpo (contrato 4.2). Se as linhas mudaram desde a queda, o lote é outro.
+        const same = inflight.digest === rowsDigest(items.map((i) => i.row));
+        if ((await sendChunk(items, same ? inflight.batchId : uuid())) === 'stop') break;
         continue;
       }
       store.clearInflight();

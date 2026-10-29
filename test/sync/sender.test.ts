@@ -91,6 +91,28 @@ test('sender: morte no meio (fecha e reabre o Store) reusa o batchId', async () 
   rmSync(dir, { recursive: true, force: true });
 });
 
+test('sender: linha que cresceu depois da morte vai num batchId novo e chega inteira', async () => {
+  const dir = tmp();
+  let store = Store.open(dir);
+  const api = new FakeServer();
+  api.replayByBatch = true;
+  const base = mkRow('k1', '2026-10-01', { tokens: { input: 1, output: 100, cacheRead: 0, cacheWrite: 0, thinking: 0 } });
+  store.enqueue([base]);
+  api.fault = (n) => (n === 1 ? 'die' : undefined);
+  await assert.rejects(sendPending(store, api, { timezone: 'UTC', now: 1000 }), /morreu/);
+  store.close();
+
+  store = Store.open(dir);
+  // A coleta seguinte sobe o bucket antes do reenvio.
+  store.enqueue([{ ...base, tokens: { ...base.tokens, output: 250 } }]);
+  await sendPending(store, api, { timezone: 'UTC', now: 2000 });
+  assert.notEqual(api.calls[1]!.batchId, api.calls[0]!.batchId);
+  assert.equal(api.rows.get('k1')!.tokens.output, 250);
+  assert.equal(store.stats().pending, 0);
+  store.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test('sender: Retry-After vence o backoff e 413 divide o lote', async () => {
   const dir = tmp();
   const store = Store.open(dir);

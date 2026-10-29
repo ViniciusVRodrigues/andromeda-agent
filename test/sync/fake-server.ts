@@ -46,10 +46,15 @@ export class FakeServer implements AgentApi {
   fault: (n: number, rows: PayloadRow[]) => Fault = () => undefined;
   /** Chaves que o servidor rejeita sem retry. */
   rejectKeys = new Set<string>();
+  /** Contrato 4.2: `batchId` já processado devolve a resposta guardada, sem ler o corpo. */
+  replayByBatch = false;
+  private processed = new Map<string, UsageBatchResponse>();
 
   async uploadUsage(batchId: string, _tz: string, rows: PayloadRow[]): Promise<UsageBatchResponse> {
     this.calls.push({ batchId, keys: rows.map((r) => r.key) });
     const f = this.fault(this.calls.length, rows);
+    const replay = this.replayByBatch ? this.processed.get(batchId) : undefined;
+    if (replay && !f) return structuredClone(replay);
     if (f === 'fail503') throw new ApiError('indisponível', 503, null, null);
     if (f === 'too-large') throw new ApiError('grande', 413, null, null);
     const results: RowResult[] = rows.map((r) => {
@@ -68,6 +73,9 @@ export class FakeServer implements AgentApi {
       this.rows.set(r.key, merged);
       return { key: r.key, status: changed ? 'accepted' : 'duplicate' };
     });
+    const rejectedN = results.filter((x) => x.status === 'rejected').length;
+    const duplicateN = results.filter((x) => x.status === 'duplicate').length;
+    this.processed.set(batchId, { batchId, accepted: results.length - rejectedN - duplicateN, duplicate: duplicateN, rejected: rejectedN, results });
     if (f === 'die') throw new Error('processo morreu');
     if (f === 'lose') throw new ApiError('resposta perdida', 0, null, null);
     const rejected = results.filter((x) => x.status === 'rejected').length;
