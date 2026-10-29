@@ -1,7 +1,73 @@
 # andromeda-agent
 
-Agente local do Andromeda: lê os logs locais das IAs de programação (Claude Code, Codex e outras) e envia ao Andromeda só os números de tokens, por sessão e hora, com a tarefa da sprint apontada.
+Agente local do Andromeda. Ele lê os logs que as IAs de programação já gravam na sua máquina e envia ao servidor do Andromeda só as **contagens de tokens**, por sessão e por hora, junto da tarefa da sprint que estava ativa. Nunca envia prompt, resposta, conteúdo de arquivo nem caminho local.
 
-Nunca envia prompt, resposta, conteúdo de arquivo nem caminho local. O código é aberto para qualquer pessoa auditar o que o agente lê e envia.
+O código é aberto (MIT) para qualquer pessoa auditar o que é lido e enviado. Detalhes em [PRIVACY.md](PRIVACY.md).
 
-Em construção. Licença MIT.
+## Requisitos
+
+- Node.js 22.15 ou mais novo.
+- Windows, macOS ou Linux. Não precisa de administrador.
+
+## Instalação
+
+```sh
+npm i -g andromeda-agent
+```
+
+O comando fica disponível como `andromeda-agent`.
+
+## Comandos
+
+| Comando | O que faz |
+|---|---|
+| `andromeda-agent pair <url-do-servidor>` | Liga este computador à sua conta do Andromeda. A URL do servidor só é aceita por aqui. |
+| `andromeda-agent install` | Registra o agente para iniciar sozinho no seu usuário (veja "Sobreviver a reinício"). |
+| `andromeda-agent uninstall` | Remove o registro do serviço. |
+| `andromeda-agent status` | Mostra se o serviço existe, se está ativo e o resultado da última execução. |
+| `andromeda-agent doctor` | Confere requisitos, pareamento, IAs encontradas e conexão. |
+| `andromeda-agent run` | Roda o agente em primeiro plano (é o que o serviço executa). |
+| `andromeda-agent --dry-run` | Mostra o JSON exato que seria enviado, sem enviar nada. |
+| `andromeda-agent task <ref>` | Marca a tarefa ativa. O uso de IA sem tarefa do mesmo dia passa a apontar para ela (retroage). |
+| `andromeda-agent task --clear` | Tira a tarefa ativa. |
+
+## IAs suportadas
+
+Na v1: **Claude Code** e **Codex**.
+
+Próximas: Gemini CLI, opencode, Copilot CLI e VS Code, Cline, Roo e Kilo.
+
+O agente só **lê** os arquivos dessas ferramentas. Nunca altera a configuração delas.
+
+## Onde fica o estado
+
+| Sistema | Pasta |
+|---|---|
+| Windows | `%LOCALAPPDATA%\andromeda-agent` |
+| macOS | `~/Library/Application Support/andromeda-agent` |
+| Linux | `$XDG_STATE_HOME/andromeda-agent` ou `~/.local/state/andromeda-agent` |
+
+Guarda o cursor de leitura, a fila local de envios pendentes e o sal da máquina. O token de acesso fica no cofre do sistema ou, sem cofre, num arquivo só seu.
+
+## Sobreviver a reinício
+
+`andromeda-agent install` cria, só para o seu usuário e sem admin:
+
+- **Windows:** uma tarefa agendada `andromeda-agent` (ao entrar na sessão e ao desbloquear), sem janela.
+- **macOS:** um LaunchAgent `dev.andromeda.agent` em `~/Library/LaunchAgents`.
+- **Linux:** uma unit de usuário do systemd em `~/.config/systemd/user`. Para rodar sem sessão aberta, rode você mesma `loginctl enable-linger <seu-usuário>`; o agente nunca faz isso por conta própria. Sem systemd, use `andromeda-agent run` num terminal ou uma entrada de autostart XDG.
+
+Nada é registrado na instalação do pacote (não há `postinstall`); só o comando `install` mexe no sistema.
+
+## Desinstalar por completo
+
+```sh
+andromeda-agent uninstall      # remove a tarefa / LaunchAgent / unit
+npm rm -g andromeda-agent      # remove o programa
+```
+
+Depois apague a pasta de estado (tabela acima) e a entrada `andromeda-agent` do cofre do sistema, se houver. Para apagar os dados já enviados, peça ao administrador da sua organização no Andromeda.
+
+## Licença
+
+MIT. Veja [LICENSE](LICENSE).
