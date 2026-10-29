@@ -1,7 +1,7 @@
 // Tipos compartilhados entre os módulos. O contrato HTTP segue o design do
 // endpoint v2 do Andromeda (seções 2 a 9).
 
-export type ToolId = 'claude-code' | 'codex';
+export type ToolId = 'claude-code' | 'codex' | 'gemini-cli' | 'opencode' | 'kilo' | 'cline' | 'roo-code';
 
 export interface TokenCounts {
   /** Entrada sem cache. */
