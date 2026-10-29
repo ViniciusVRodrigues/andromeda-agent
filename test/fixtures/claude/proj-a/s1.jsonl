@@ -1,0 +1,7 @@
+{"type":"user","timestamp":"2026-10-29T10:00:00.000Z","message":{"role":"user","content":"SEGREDO prompt usage"},"sessionId":"s1","cwd":"/work/a"}
+{"type":"assistant","timestamp":"2026-10-29T10:00:01.000Z","sessionId":"s1","cwd":"/work/a","gitBranch":"feature/x","message":{"id":"msg_1","model":"claude-opus-4","content":[{"type":"text","text":"SEGREDO resposta"}],"usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":20,"output_tokens_details":{"thinking_tokens":3}}}}
+{"type":"assistant","timestamp":"2026-10-29T10:00:02.000Z","sessionId":"s1","cwd":"/work/a","gitBranch":"HEAD","message":{"id":"msg_2","model":"claude-opus-4","usage":{"input_tokens":7,"output_tokens":9}}}
+{"type":"assistant","timestamp":"2026-10-29T10:00:03.000Z","sessionId":"s1","gitBranch":"","message":{"id":"msg_3","model":"<synthetic>","usage":{"input_tokens":1,"output_tokens":1}}}
+{"type":"assistant","timestamp":"2026-10-29T10:00:04.000Z","sessionId":"s1","message":{"model":"claude-opus-4","usage":{"input_tokens":1,"output_tokens":1}}}
+{"type":"assistant","usage": nao-e-json
+{"type":"assistant","timestamp":"2026-10-29T10:00:05.000Z","sessionId":"s1","gitBranch":"","message":{"id":"msg_1","model":"claude-opus-4","usage":{"input_tokens":10,"output_tokens":50}}}
