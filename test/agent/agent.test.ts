@@ -289,6 +289,14 @@ test('uninstall --purge apaga o estado e as credenciais; sem --purge mantém', a
     assert.equal(existsSync(sb.state), false);
     assert.equal(await creds.load(), null);
     assert.ok(runner.calls.length >= 2);
+
+    // Pasta de estado com arquivos alheios: o --purge só leva os do agente.
+    mkdirSync(sb.state, { recursive: true });
+    writeFileSync(join(sb.state, 'agent.log'), 'x');
+    writeFileSync(join(sb.state, 'meu-arquivo.txt'), 'nao apagar');
+    assert.equal(await runCli(['uninstall', '--purge'], a.ctx), 0);
+    assert.equal(existsSync(join(sb.state, 'agent.log')), false);
+    assert.equal(readFileSync(join(sb.state, 'meu-arquivo.txt'), 'utf8'), 'nao apagar');
   } finally {
     sb.cleanup();
   }

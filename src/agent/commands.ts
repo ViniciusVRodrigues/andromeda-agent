@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import * as zlib from 'node:zlib';
@@ -390,13 +390,33 @@ async function cmdInstall(ctx: CliContext): Promise<number> {
   return 0;
 }
 
+/** Tudo o que o agente grava na pasta de estado. */
+const STATE_FILES = [
+  'agent.db',
+  'agent.db-wal',
+  'agent.db-shm',
+  'agent.lock',
+  'agent.log',
+  'agent.log.1',
+  'credentials.json',
+  'andromeda-agent-task.xml',
+  'launch.vbs',
+];
+
 async function cmdUninstall(ctx: CliContext, args: string[]): Promise<number> {
   const plan = planOf(ctx);
   await uninstallService(plan, ctx.runner ?? nodeRunner, ctx.serviceFs ?? nodeServiceFs);
   line(ctx, 'Serviço removido.');
   if (args.includes('--purge')) {
     await credStoreOf(ctx).clear();
-    rmSync(stateDirOf(ctx), { recursive: true, force: true });
+    // Só os arquivos do agente: ANDROMEDA_AGENT_HOME pode apontar para uma pasta com outras coisas.
+    const dir = stateDirOf(ctx);
+    for (const f of STATE_FILES) rmSync(join(dir, f), { force: true });
+    try {
+      rmdirSync(dir);
+    } catch {
+      // pasta com outros arquivos fica como está
+    }
     line(ctx, 'Dados locais e credenciais apagados.');
   } else {
     line(ctx, 'Dados locais e credenciais mantidos. Use uninstall --purge para apagar tudo.');
