@@ -64,18 +64,33 @@ export function buildTaskXml(userId: string, vbsPath: string): string {
 `;
 }
 
-/** Roda com janela oculta e sem esperar; prefere o node gravado no install. */
-export function buildLaunchVbs(nodePath: string, cliPath: string): string {
-  const tail = `" ""${cliPath.replace(/"/g, '""')}"" run"`;
+export const RESTART_DELAY_MS = 60_000;
+
+/**
+ * Roda o node com janela oculta e o supervisiona: se ele cai (saída diferente de
+ * zero), espera um minuto e sobe de novo. O `RestartOnFailure` do Agendador não
+ * serve para isso: no ensaio de 2026-10-29 ele não reiniciou a tarefa depois de
+ * o processo morrer, só cobre falha ao iniciar. Saída 0 (parada limpa, ou outra
+ * instância já com o `agent.lock`) encerra. Como o wscript fica vivo, o
+ * `IgnoreNew` impede uma segunda cópia no logon ou desbloqueio seguinte.
+ * Prefere o node gravado no install.
+ */
+export function buildLaunchVbs(nodePath: string, cliPath: string, restartDelayMs = RESTART_DELAY_MS): string {
   return [
     "' Gerado por andromeda-agent install. Nao edite.",
     'Option Explicit',
-    'Dim sh, fso, node',
+    'Dim sh, fso, node, cmd, rc',
     'Set sh = CreateObject("WScript.Shell")',
     'Set fso = CreateObject("Scripting.FileSystemObject")',
     `node = ${vbsQuote(nodePath)}`,
     'If Not fso.FileExists(node) Then node = "node"',
-    `sh.Run """" & node & """${tail}, 0, False`,
+    `cmd = """" & node & """ ""${cliPath.replace(/"/g, '""')}"" run"`,
+    'Do',
+    '  rc = sh.Run(cmd, 0, True)',
+    '  If rc = 0 Then Exit Do',
+    `  WScript.Sleep ${Math.max(1000, Math.round(restartDelayMs))}`,
+    'Loop',
+    'WScript.Quit rc',
     '',
   ].join('\r\n');
 }
@@ -88,7 +103,8 @@ export function planWindows(i: PlanInput): ServicePlan {
     platform: 'win32',
     files: [
       { path: xmlPath, content: buildTaskXml(userId, vbsPath), encoding: 'utf16le-bom' },
-      { path: vbsPath, content: buildLaunchVbs(i.nodePath, i.cliPath) },
+      // UTF-16 com BOM: o WSH leria UTF-8 como ANSI e quebraria pastas com acento.
+      { path: vbsPath, content: buildLaunchVbs(i.nodePath, i.cliPath), encoding: 'utf16le-bom' },
     ],
     installCommands: [
       ['schtasks', ['/create', '/tn', TASK_NAME, '/xml', xmlPath, '/f']],

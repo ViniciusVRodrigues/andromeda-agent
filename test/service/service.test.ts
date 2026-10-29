@@ -1,5 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { buildLaunchVbs } from '../../src/service/windows.js';
 import { planService, installService, uninstallService, serviceStatus, type Runner, type ServiceFs, type RunResult } from '../../src/service/index.js';
 
 function fakeRunner(results: Record<string, RunResult> = {}) {
@@ -49,7 +54,32 @@ test('windows: launch.vbs com aspas escapadas e fallback para node', () => {
   assert.ok(vbs.includes('node = "C:\\Program Files\\nodejs\\node.exe"'));
   assert.ok(vbs.includes('FileExists(node)'));
   assert.ok(vbs.includes('node = "node"'));
-  assert.ok(vbs.includes('""C:\\Users\\Zé & Cia\\lib\\dist\\src\\cli.js"" run", 0, False'));
+  assert.ok(vbs.includes('cmd = """" & node & """ ""C:\\Users\\Zé & Cia\\lib\\dist\\src\\cli.js"" run"'));
+  assert.ok(vbs.includes('rc = sh.Run(cmd, 0, True)'));
+  assert.ok(vbs.includes('If rc = 0 Then Exit Do'));
+  assert.ok(vbs.includes('WScript.Sleep 60000'));
+});
+
+// O texto certo não basta: o VBS precisa compilar no próprio Windows Script Host.
+test('windows: launch.vbs gerado é VBScript válido e monta o comando com espaços', { skip: process.platform !== 'win32' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'andromeda vbs '));
+  try {
+    const outFile = join(dir, 'cmd.txt');
+    // Em vez de rodar, grava o comando montado (em Unicode) para conferir.
+    const vbs = buildLaunchVbs('C:\\Program Files\\nodejs\\node.exe', 'C:\\Pasta Zé & Cia\\cli.js').replace(
+      'rc = sh.Run(cmd, 0, True)',
+      `fso.CreateTextFile("${outFile}", True, True).Write cmd : rc = 0`,
+    );
+    const file = join(dir, 'launch.vbs');
+    // Mesmo formato do install: UTF-16 LE com BOM, que o WSH lê sem depender da página de código.
+    writeFileSync(file, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(vbs, 'utf16le')]));
+    const r = spawnSync('cscript.exe', ['//Nologo', '//B', file], { encoding: 'latin1' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    const out = readFileSync(outFile).subarray(2).toString('utf16le');
+    assert.match(out, /^"(C:\\Program Files\\nodejs\\node\.exe|node)" "C:\\Pasta Zé & Cia\\cli\.js" run$/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('windows: instalação grava UTF-16 LE com BOM e roda schtasks falso', async () => {
