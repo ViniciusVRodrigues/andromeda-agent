@@ -106,8 +106,18 @@ export class FakeServer implements AgentApi {
     return this.keysOfDay(day);
   }
 
-  async heartbeat(_req: HeartbeatRequest): Promise<HeartbeatResponse> {
-    return { serverTime: new Date().toISOString(), minVersion: '0.0.0', activeTask: null };
+  /** Pedido de "sincronizar agora"; `undefined` imita servidor antigo (campo ausente). O `syncServed` igual o apaga. */
+  syncRequestedAt: string | null | undefined = undefined;
+  heartbeats: HeartbeatRequest[] = [];
+  /** Faz o heartbeat de número n (começando em 1) falhar com erro de rede. */
+  heartbeatFails: (n: number, req: HeartbeatRequest) => boolean = () => false;
+  async heartbeat(req: HeartbeatRequest): Promise<HeartbeatResponse> {
+    this.heartbeats.push(structuredClone(req));
+    if (this.heartbeatFails(this.heartbeats.length, req)) throw new ApiError('rede', 0, null, null);
+    if (req.syncServed !== undefined && req.syncServed === this.syncRequestedAt) this.syncRequestedAt = null;
+    const res: HeartbeatResponse = { serverTime: new Date().toISOString(), minVersion: '0.0.0', activeTask: null };
+    if (this.syncRequestedAt !== undefined) res.syncRequestedAt = this.syncRequestedAt;
+    return res;
   }
   async setActiveTask(): Promise<SetActiveTaskResponse> {
     throw new Error('não usado');

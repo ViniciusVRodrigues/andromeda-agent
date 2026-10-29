@@ -33,6 +33,14 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 | `andromeda-agent task --clear` | Tira a tarefa ativa. Ela não expira sozinha: o `status` avisa quando passa de 12 h. |
 | `andromeda-agent task --list` | Lista as tarefas da sua sprint. |
 
+## Com que frequência ele envia
+
+O agente envia o uso a cada **15 minutos** (e ao iniciar). A cada **minuto** ele só fala com o servidor, para avisar que está vivo e saber se há um pedido para ele.
+
+Para não esperar: em Perfil → Conector de IA, use **Sincronizar agora**. O pedido chega ao agente em até cerca de 1 minuto. Versões abaixo da 0.3.0 não atendem esse pedido; atualize com `npm i -g andromeda-agent`.
+
+O `andromeda-agent status` mostra quando será o próximo envio.
+
 ## IAs suportadas
 
 **Claude Code**, **Codex**, **Gemini CLI**, **opencode** (1.x), **Kilo** (7.x) e **Cline** (extensão clássica, `ui_messages.json`).

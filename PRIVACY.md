@@ -30,7 +30,7 @@ O agente também lê do servidor os padrões de branch da organização (`GET /a
 
 Mais, no lote: `batchId, agentVersion, timezone`.
 
-No heartbeat: `agentVersion, timezone, pendingRows, oldestPendingDay`.
+No heartbeat (uma vez por minuto): `agentVersion, timezone, pendingRows, oldestPendingDay` e, só depois de atender um pedido de "Sincronizar agora", `syncServed` (um instante que o próprio servidor mandou, devolvido como veio).
 
 No pareamento: `agentVersion, machineName, os, osVersion, timezone`.
 

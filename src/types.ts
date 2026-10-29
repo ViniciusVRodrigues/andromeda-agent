@@ -118,12 +118,16 @@ export interface HeartbeatRequest {
   timezone: string;
   pendingRows: number;
   oldestPendingDay: string | null;
+  /** O `syncRequestedAt` que o agente atendeu, devolvido como veio. */
+  syncServed?: string;
 }
 
 export interface HeartbeatResponse {
   serverTime: string;
   minVersion: string;
   activeTask: ActiveTask | null;
+  /** Pedido de sincronizar agora ainda não atendido; ausente em servidor antigo. */
+  syncRequestedAt?: string | null;
 }
 
 export interface ReconcileDay {
@@ -214,7 +218,7 @@ export class ApiError extends Error {
   }
 }
 
-export const AGENT_VERSION = '0.2.0';
+export const AGENT_VERSION = '0.3.0';
 
 /** Evento já com repositório e branch resolvidos localmente (P3), pronto para guardar. */
 export interface ResolvedEvent extends UsageEvent {

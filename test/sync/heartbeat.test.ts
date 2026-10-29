@@ -21,8 +21,19 @@ test('heartbeat: pendências e dia mais antigo', () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test('heartbeat: vence a cada 1 h', () => {
+test('heartbeat: vence a cada volta (>= 50 s)', () => {
   assert.equal(heartbeatDue(null, 1000), true);
-  assert.equal(heartbeatDue(0, 3_599_999), false);
-  assert.equal(heartbeatDue(0, 3_600_000), true);
+  assert.equal(heartbeatDue(0, 49_999), false);
+  assert.equal(heartbeatDue(0, 50_000), true);
+});
+
+test('heartbeat: syncServed só entra no corpo quando há valor', () => {
+  const s = Store.open(mkdtempSync(join(tmpdir(), 'hb-')));
+  try {
+    assert.ok(!('syncServed' in buildHeartbeat(s, '0.3.0', 'UTC')));
+    assert.ok(!('syncServed' in buildHeartbeat(s, '0.3.0', 'UTC', null)));
+    assert.equal(buildHeartbeat(s, '0.3.0', 'UTC', '2026-10-29T18:00:01.123Z').syncServed, '2026-10-29T18:00:01.123Z');
+  } finally {
+    s.close();
+  }
 });
