@@ -43,7 +43,8 @@ export function buildPlist(nodePath: string, cliPath: string, stateDir: string):
 
 export function planMacos(i: PlanInput): ServicePlan {
   const plist = posix.join(i.home, 'Library', 'LaunchAgents', `${LABEL}.plist`);
-  const domain = `gui/${i.uid ?? 501}`;
+  if (i.uid === undefined) throw new Error('uid do usuário ausente: o LaunchAgent precisa do uid real (process.getuid)');
+  const domain = `gui/${i.uid}`;
   return {
     platform: 'darwin',
     files: [{ path: plist, content: buildPlist(i.nodePath, i.cliPath, i.stateDir), mode: 0o644 }],

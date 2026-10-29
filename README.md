@@ -15,7 +15,7 @@ O código é aberto (MIT) para qualquer pessoa auditar o que é lido e enviado. 
 npm i -g andromeda-agent
 ```
 
-O comando fica disponível como `andromeda-agent`.
+O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale de forma global antes de rodar `install`: o serviço não funciona a partir do cache do `npx`.
 
 ## Comandos
 
@@ -23,13 +23,15 @@ O comando fica disponível como `andromeda-agent`.
 |---|---|
 | `andromeda-agent pair <url-do-servidor>` | Liga este computador à sua conta do Andromeda. A URL do servidor só é aceita por aqui. |
 | `andromeda-agent install` | Registra o agente para iniciar sozinho no seu usuário (veja "Sobreviver a reinício"). |
-| `andromeda-agent uninstall` | Remove o registro do serviço. |
+| `andromeda-agent uninstall` | Remove o registro do serviço. Com `--purge`, apaga também os dados locais e as credenciais. |
+| `andromeda-agent unpair` | Apaga as credenciais locais (a revogação no servidor é pelo app web). |
 | `andromeda-agent status` | Mostra se o serviço existe, se está ativo e o resultado da última execução. |
 | `andromeda-agent doctor` | Confere requisitos, pareamento, IAs encontradas e conexão. |
-| `andromeda-agent run` | Roda o agente em primeiro plano (é o que o serviço executa). |
-| `andromeda-agent --dry-run` | Mostra o JSON exato que seria enviado, sem enviar nada. |
+| `andromeda-agent run` | Roda o agente em primeiro plano (é o que o serviço executa). `run --once` faz um ciclo e sai. |
+| `andromeda-agent --dry-run [--day AAAA-MM-DD]` | Mostra o JSON exato que seria enviado, sem enviar nada e sem gravar nada no estado. |
 | `andromeda-agent task <ref>` | Marca a tarefa ativa. O uso de IA sem tarefa do mesmo dia passa a apontar para ela (retroage). |
 | `andromeda-agent task --clear` | Tira a tarefa ativa. |
+| `andromeda-agent task --list` | Lista as tarefas da sua sprint. |
 
 ## IAs suportadas
 
