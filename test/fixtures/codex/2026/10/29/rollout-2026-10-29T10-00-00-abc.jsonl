@@ -1,0 +1,7 @@
+{"timestamp":"2026-10-29T10:00:00.000Z","type":"session_meta","payload":{"id":"sess-1","cwd":"/work/a","git":{"branch":"feature/y"},"instructions":"SEGREDO"}}
+{"timestamp":"2026-10-29T10:00:01.000Z","type":"turn_context","payload":{"cwd":"/work/a/sub","model":"gpt-5-codex"}}
+{"timestamp":"2026-10-29T10:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":null}}
+{"timestamp":"2026-10-29T10:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50,"reasoning_output_tokens":20,"total_tokens":1050},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50,"reasoning_output_tokens":20,"total_tokens":1050}}}}
+{"timestamp":"2026-10-29T10:00:03.500Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":50,"reasoning_output_tokens":20,"total_tokens":1050}}}}
+{"timestamp":"2026-10-29T10:00:04.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":2500,"cached_input_tokens":2000,"cache_write_input_tokens":10,"output_tokens":120,"reasoning_output_tokens":40,"total_tokens":2620}}}}
+{"timestamp":"2026-10-29T10:00:05.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cached_input_tokens":100,"output_tokens":10,"reasoning_output_tokens":0,"total_tokens":310}}}}
