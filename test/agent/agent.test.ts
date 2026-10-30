@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { collect } from '../../src/agent/collect.js';
-import { acquireLock, cycle, getState, guardedApi, newMemory, versionLess, LOCK_STALE_MS, type AgentDeps } from '../../src/agent/loop.js';
+import { acquireLock, agentLockStatus, cycle, getState, guardedApi, newMemory, versionLess, LOCK_STALE_MS, type AgentDeps } from '../../src/agent/loop.js';
 import { runCli } from '../../src/agent/commands.js';
 import { createLogger, MAX_LOG_BYTES } from '../../src/log.js';
 import { Store } from '../../src/store/db.js';
@@ -239,6 +239,7 @@ test('log: rotaciona acima de 1 MB e escreve só linhas operacionais', () => {
 test('install: recusa cache do npx; usa o uid real e grava o node; nada é executado de verdade', async () => {
   const sb = makeSandbox();
   try {
+    await new FileCredentialStore(sb.state, () => {}).save(fakeCreds());
     const npx = makeCtx(sb, { cliPath: '/home/a/.npm/_npx/abc/node_modules/andromeda-agent/dist/src/cli.js', platform: 'linux' });
     assert.equal(await runCli(['install'], npx.ctx), 1);
     assert.match(npx.cap.text(), /npm i -g andromeda-agent/);
@@ -269,6 +270,82 @@ test('install: recusa cache do npx; usa o uid real e grava o node; nada é execu
       assert.equal(await runCli(['install'], noUid.ctx), 1);
       assert.match(noUid.cap.text(), /uid/);
     }
+  } finally {
+    sb.cleanup();
+  }
+});
+
+const WIN = { cliPath: 'C:\\x\\cli.js', platform: 'win32' as const, nodePath: 'C:\\node.exe' };
+const noFs = { mkdir: async () => {}, writeFile: async () => {}, rm: async () => {} };
+
+test('install sem pareamento: não roda o serviço e sai 1; --force instala com o aviso', async () => {
+  const sb = makeSandbox();
+  try {
+    const runner = fakeRunner();
+    const a = makeCtx(sb, { ...WIN, runner, serviceFs: noFs });
+    assert.equal(await runCli(['install'], a.ctx), 1);
+    assert.match(a.cap.text(), /Este computador ainda não está pareado\. Rode primeiro: andromeda-agent pair <url-do-servidor>/);
+    assert.equal(runner.calls.length, 0);
+    const b = makeCtx(sb, { ...WIN, runner, serviceFs: noFs });
+    assert.equal(await runCli(['install', '--force', '--no-ai'], b.ctx), 0, b.cap.text());
+    assert.match(b.cap.text(), /ainda não está pareado/);
+    assert.ok(runner.calls.length >= 2);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('install no Windows: schtasks /run falha -> avisa com o código e sai 0', async () => {
+  const sb = makeSandbox();
+  try {
+    await new FileCredentialStore(sb.state, () => {}).save(fakeCreds());
+    const runner = {
+      async run(_c: string, a: string[]) {
+        return { code: a[0] === '/run' ? 1 : 0, stdout: '', stderr: '' };
+      },
+    };
+    const w = makeCtx(sb, { ...WIN, runner, serviceFs: noFs });
+    assert.equal(await runCli(['install', '--no-ai'], w.ctx), 0, w.cap.text());
+    assert.match(w.cap.text(), /A tarefa foi criada, mas não iniciou agora \(código 1\)\. Rode: schtasks \/run \/tn andromeda-agent/);
+    assert.doesNotMatch(w.cap.text(), /Serviço instalado/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('status: rodando (pid N) pelo agent.lock; parado com o comando de partida do SO', async () => {
+  const sb = makeSandbox();
+  try {
+    const mk = (platform: NodeJS.Platform) =>
+      makeCtx(sb, { runner: fakeRunner(0, platform === 'win32' ? '<Task><Settings></Settings></Task>' : platform === 'linux' ? 'inactive' : 'state = not running'), platform, cliPath: '/x/cli.js', uid: 1000, credStore: new FileCredentialStore(sb.state, () => {}) });
+    const w = mk('win32');
+    await runCli(['status'], w.ctx);
+    assert.match(w.cap.text(), /Serviço: instalado.*parado/);
+    assert.match(w.cap.text(), /Para iniciar agora: schtasks \/run \/tn andromeda-agent/);
+    assert.match((await (async () => { const c = mk('linux'); await runCli(['status'], c.ctx); return c.cap.text(); })()), /Para iniciar agora: systemctl --user start andromeda-agent/);
+    assert.match((await (async () => { const c = mk('darwin'); await runCli(['status'], c.ctx); return c.cap.text(); })()), /Para iniciar agora: launchctl kickstart gui\/\$UID\/dev\.andromeda\.agent/);
+    // lock com o pid deste processo (vivo) e recente
+    mkdirSync(sb.state, { recursive: true });
+    writeFileSync(join(sb.state, 'agent.lock'), String(process.pid));
+    const r = mk('win32');
+    await runCli(['status'], r.ctx);
+    assert.ok(r.cap.text().includes(`rodando (pid ${process.pid})`));
+    assert.doesNotMatch(r.cap.text(), /Para iniciar agora/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('agentLockStatus: pid morto ou trava velha = parado', () => {
+  const sb = makeSandbox();
+  try {
+    mkdirSync(sb.state, { recursive: true });
+    writeFileSync(join(sb.state, 'agent.lock'), '4242');
+    const t = Date.now();
+    assert.deepEqual(agentLockStatus(sb.state, { alive: () => true, now: () => t }), { running: true, pid: 4242 });
+    assert.equal(agentLockStatus(sb.state, { alive: () => false, now: () => t }).running, false);
+    assert.equal(agentLockStatus(sb.state, { alive: () => true, now: () => t + LOCK_STALE_MS + 60_000 }).running, false);
+    assert.equal(agentLockStatus(join(sb.state, 'nada')).running, false);
   } finally {
     sb.cleanup();
   }

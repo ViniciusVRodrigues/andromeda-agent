@@ -25,8 +25,8 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 
 | Comando | O que faz |
 |---|---|
-| `andromeda-agent pair <url-do-servidor>` | Liga este computador à sua conta do Andromeda. A URL do servidor só é aceita por aqui. |
-| `andromeda-agent install [--no-ai]` | Registra o agente para iniciar sozinho no seu usuário (veja "Sobreviver a reinício") e liga o MCP e o hook no Claude Code e no Codex (veja "IAs marcam a tarefa sozinhas"). `--no-ai` pula as IAs. |
+| `andromeda-agent pair <url-do-servidor>` | Liga este computador à sua conta do Andromeda. A URL do servidor só é aceita por aqui. Deixe o comando aberto até aparecer "Pareado com a organização…"; se a rede cair, ele tenta de novo até o código expirar. |
+| `andromeda-agent install [--no-ai] [--force]` | Registra o agente para iniciar sozinho no seu usuário (veja "Sobreviver a reinício") e liga o MCP e o hook no Claude Code e no Codex (veja "IAs marcam a tarefa sozinhas"). `--no-ai` pula as IAs. O `install` exige o computador já pareado (`pair`); `--force` pula essa checagem. |
 | `andromeda-agent uninstall` | Remove o registro do serviço. Com `--purge`, apaga também os dados locais e as credenciais. |
 | `andromeda-agent unpair` | Apaga as credenciais locais (a revogação no servidor é pelo app web). |
 | `andromeda-agent status` | Mostra se o serviço existe, se está ativo e o resultado da última execução. |

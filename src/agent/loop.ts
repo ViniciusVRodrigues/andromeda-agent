@@ -408,6 +408,26 @@ export function acquireLock(
   return null;
 }
 
+/** Lê o agent.lock sem tocar nele: o agente roda se o pid está vivo e a trava foi renovada há menos de LOCK_STALE_MS. */
+export function agentLockStatus(
+  dir: string,
+  opts: { alive?: (pid: number) => boolean; now?: () => number } = {},
+): { running: boolean; pid: number | null } {
+  const path = join(dir, 'agent.lock');
+  const alive = opts.alive ?? pidAlive;
+  const now = opts.now ?? Date.now;
+  try {
+    const holder = Number(readFileSync(path, 'utf8').trim());
+    const ageMs = now() - (mtimeOf(path) ?? 0);
+    if (Number.isInteger(holder) && holder > 0 && alive(holder) && ageMs < LOCK_STALE_MS) {
+      return { running: true, pid: holder };
+    }
+  } catch {
+    /* sem trava */
+  }
+  return { running: false, pid: null };
+}
+
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) {
