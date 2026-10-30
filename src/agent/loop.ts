@@ -1,7 +1,7 @@
 import { readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENT_VERSION, ApiError } from '../types.js';
-import type { ActiveTask, AgentApi, LogParser, ParserEnv, PayloadRow, UsageBatchResponse } from '../types.js';
+import type { ActiveTask, AgentApi, HeartbeatResponse, LogParser, ParserEnv, PayloadRow, UsageBatchResponse } from '../types.js';
 import { localDayOf, type Store } from '../store/db.js';
 import type { GitInfo } from '../task/git.js';
 import type { CredentialStore } from '../auth/tokens.js';
@@ -15,10 +15,17 @@ import { nullLogger, type Logger } from '../log.js';
 import { collect, type CollectResult } from './collect.js';
 
 export const CYCLE_MS = 60_000;
+/** Coleta e envio a cada 15 min; devido com folga de 30 s (a volta do laço não é exata). */
+export const SYNC_INTERVAL_MS = 15 * 60_000;
+export const SYNC_DUE_MS = SYNC_INTERVAL_MS - 30_000;
 export const RECONCILE_INTERVAL_MS = 24 * 3_600_000;
 export const RECONCILE_DAYS = 7;
 export const RETENTION_MS = 90 * 24 * 3_600_000;
 export const LOCK_STALE_MS = 10 * 60_000;
+
+export function syncDue(lastMs: number | null, nowMs: number): boolean {
+  return lastMs === null || !Number.isFinite(lastMs) || nowMs - lastMs >= SYNC_DUE_MS;
+}
 
 export type AgentState = 'ok' | 'needs_pair' | 'upgrade';
 
@@ -70,11 +77,16 @@ export function versionLess(a: string, b: string): boolean {
   return false;
 }
 
+export type SyncReason = 'start' | 'interval' | 'requested';
+
 export interface CycleSummary {
   collect: CollectResult | null;
   sent: number;
   heartbeat: boolean;
   reconciled: boolean;
+  /** Esta volta coletou e enviou (a volta só de heartbeat devolve false). */
+  synced: boolean;
+  syncReason?: SyncReason;
   state: AgentState;
 }
 
@@ -82,13 +94,18 @@ export interface CycleSummary {
 export interface LoopMemory {
   upgrade: boolean;
   failedRefreshToken: string | null;
-  forceHeartbeat: boolean;
+  /** Sincroniza na próxima volta, venha ou não o prazo (início do laço e `run --once`). */
+  forceSync: boolean;
+  /** Último pedido de sincronização do servidor que o agente atendeu (nunca atende o mesmo duas vezes). */
+  servedSync: string | null;
+  /** Pedido atendido cuja confirmação (`syncServed`) o servidor ainda não aceitou. */
+  servedToConfirm: string | null;
   /** Instante da última tentativa de buscar os padrões de branch (no máximo uma por hora). */
   patternsTriedAt: number | null;
 }
 
 export function newMemory(): LoopMemory {
-  return { upgrade: false, failedRefreshToken: null, forceHeartbeat: true, patternsTriedAt: null };
+  return { upgrade: false, failedRefreshToken: null, forceSync: true, servedSync: null, servedToConfirm: null, patternsTriedAt: null };
 }
 
 function applyServerTask(deps: AgentDeps, t: ActiveTask): void {
@@ -104,12 +121,18 @@ function applyServerTask(deps: AgentDeps, t: ActiveTask): void {
   });
 }
 
-/** Um ciclo: coleta, heartbeat, envio, reconciliação diária e poda. Erro de rede nunca derruba. */
-export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSummary> {
+/** Coleta, envio e reconciliação diária. Sem `api`, só coleta. Devolve se a sessão foi recusada. */
+async function syncNow(
+  deps: AgentDeps,
+  mem: LoopMemory,
+  api: AgentApi | null,
+  sum: CycleSummary,
+  onError: (what: string, e: unknown) => void,
+): Promise<boolean> {
   const log = deps.log ?? nullLogger;
   const clock = deps.now ?? Date.now;
   const { store } = deps;
-  const sum: CycleSummary = { collect: null, sent: 0, heartbeat: false, reconciled: false, state: getState(store) };
+  let authFailed = false;
 
   try {
     sum.collect = await collect(store, deps.parsers, deps.git, deps.env, deps.timezone, { log });
@@ -120,58 +143,10 @@ export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSumm
   } catch (e) {
     log.error(`coleta falhou (${e instanceof Error ? e.name : 'erro'})`);
   }
-
-  const creds = await deps.creds.load();
-  if (!creds) {
-    setState(store, 'needs_pair');
-    sum.state = 'needs_pair';
-    return sum;
-  }
-  if (mem.failedRefreshToken !== null && mem.failedRefreshToken === creds.refreshToken) {
-    sum.state = 'needs_pair';
-    return sum;
-  }
-  mem.failedRefreshToken = null;
-  if (getState(store) === 'needs_pair') setState(store, 'ok');
-
-  const api = guardedApi(deps.api);
-  let authFailed = false;
-  const onError = (what: string, e: unknown): void => {
-    if (e instanceof ReauthRequired || (e instanceof ApiError && e.status === 401)) {
-      authFailed = true;
-      log.warn(`${what}: sessão recusada; é preciso parear de novo`);
-    } else if (e instanceof ApiError && e.status === 426) {
-      mem.upgrade = true;
-      log.warn(`${what}: o servidor exige uma versão mais nova do agente`);
-    } else {
-      log.warn(`${what} falhou (${e instanceof Error ? e.name : 'erro'}${e instanceof ApiError ? ` ${e.status}` : ''})`);
-    }
-  };
-
-  // padrões de branch do servidor: uma busca por hora, erro só vira aviso
-  if (!mem.upgrade && (mem.patternsTriedAt === null || clock() - mem.patternsTriedAt > PATTERNS_TTL_MS)) {
-    mem.patternsTriedAt = clock();
-    await refreshPatterns(store, api, clock(), log);
-  }
-
-  // heartbeat
-  const lastHb = store.getMeta('last_heartbeat');
-  if (!mem.upgrade && (mem.forceHeartbeat || heartbeatDue(lastHb === null ? null : Number(lastHb), clock()))) {
-    try {
-      const hb = await api.heartbeat(buildHeartbeat(store, AGENT_VERSION, deps.timezone));
-      mem.forceHeartbeat = false;
-      store.setMeta('last_heartbeat', String(clock()));
-      sum.heartbeat = true;
-      if (hb.activeTask) applyServerTask(deps, hb.activeTask);
-      else store.setLocalActiveTask(null);
-      if (hb.minVersion && versionLess(AGENT_VERSION, hb.minVersion)) mem.upgrade = true;
-    } catch (e) {
-      onError('heartbeat', e);
-    }
-  }
+  if (!api) return false;
 
   // envio
-  if (!authFailed && !mem.upgrade) {
+  if (!mem.upgrade) {
     try {
       const s = await sendPending(store, api, { timezone: deps.timezone, now: clock });
       sum.sent = s.sent + s.duplicate;
@@ -198,6 +173,105 @@ export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSumm
       if (diverged.length > 0) log.info(`reconciliação: ${diverged.length} dia(s) divergente(s)`);
     } catch (e) {
       onError('reconciliação', e);
+    }
+  }
+  return authFailed;
+}
+
+/**
+ * Uma volta: padrões (se devidos), heartbeat, e, se devido, forçado ou pedido pelo servidor,
+ * coleta + envio + reconciliação. Depois de atender um pedido, heartbeat de confirmação na hora.
+ * Erro de rede nunca derruba.
+ */
+export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSummary> {
+  const log = deps.log ?? nullLogger;
+  const clock = deps.now ?? Date.now;
+  const { store } = deps;
+  const sum: CycleSummary = { collect: null, sent: 0, heartbeat: false, reconciled: false, synced: false, state: getState(store) };
+
+  const creds = await deps.creds.load();
+  if (!creds) {
+    // sem credencial: só coleta, como antes (não grava last_sync, então segue devido)
+    await syncNow(deps, mem, null, sum, () => {});
+    setState(store, 'needs_pair');
+    sum.state = 'needs_pair';
+    return sum;
+  }
+  if (mem.failedRefreshToken !== null && mem.failedRefreshToken === creds.refreshToken) {
+    await syncNow(deps, mem, null, sum, () => {});
+    sum.state = 'needs_pair';
+    return sum;
+  }
+  mem.failedRefreshToken = null;
+  if (getState(store) === 'needs_pair') setState(store, 'ok');
+
+  const api = guardedApi(deps.api);
+  let authFailed = false;
+  const onError = (what: string, e: unknown): void => {
+    if (e instanceof ReauthRequired || (e instanceof ApiError && e.status === 401)) {
+      authFailed = true;
+      log.warn(`${what}: sessão recusada; é preciso parear de novo`);
+    } else if (e instanceof ApiError && e.status === 426) {
+      mem.upgrade = true;
+      log.warn(`${what}: o servidor exige uma versão mais nova do agente`);
+    } else {
+      log.warn(`${what} falhou (${e instanceof Error ? e.name : 'erro'}${e instanceof ApiError ? ` ${e.status}` : ''})`);
+    }
+  };
+
+  // padrões de branch do servidor: uma busca por hora, erro só vira aviso
+  if (!mem.upgrade && (mem.patternsTriedAt === null || clock() - mem.patternsTriedAt > PATTERNS_TTL_MS)) {
+    mem.patternsTriedAt = clock();
+    await refreshPatterns(store, api, clock(), log);
+  }
+
+  /** Um heartbeat; leva `syncServed` enquanto houver confirmação pendente. Devolve a resposta ou null. */
+  const beat = async (): Promise<HeartbeatResponse | null> => {
+    try {
+      const confirming = mem.servedToConfirm;
+      const res = await api.heartbeat(buildHeartbeat(store, AGENT_VERSION, deps.timezone, confirming));
+      store.setMeta('last_heartbeat', String(clock()));
+      sum.heartbeat = true;
+      if (confirming !== null && res.syncRequestedAt !== confirming) mem.servedToConfirm = null;
+      if (res.activeTask) applyServerTask(deps, res.activeTask);
+      else store.setLocalActiveTask(null);
+      if (res.minVersion && versionLess(AGENT_VERSION, res.minVersion)) mem.upgrade = true;
+      return res;
+    } catch (e) {
+      onError('heartbeat', e);
+      return null;
+    }
+  };
+
+  // heartbeat: toda volta
+  let hb: HeartbeatResponse | null = null;
+  const lastHb = store.getMeta('last_heartbeat');
+  if (!mem.upgrade && (mem.forceSync || mem.servedToConfirm !== null || heartbeatDue(lastHb === null ? null : Number(lastHb), clock()))) {
+    hb = await beat();
+  }
+
+  // decide se sincroniza
+  const lastSyncMeta = store.getMeta('last_sync');
+  const requested = hb?.syncRequestedAt ?? null;
+  const isRequested = requested !== null && requested !== mem.servedSync;
+  let reason: SyncReason | null = null;
+  if (mem.forceSync) reason = 'start';
+  else if (syncDue(lastSyncMeta === null ? null : Number(lastSyncMeta), clock())) reason = 'interval';
+  else if (isRequested) reason = 'requested';
+
+  if (reason !== null && !authFailed) {
+    if (isRequested) log.info('sincronização pedida pelo Andromeda');
+    sum.syncReason = reason;
+    authFailed = await syncNow(deps, mem, api, sum, onError);
+    mem.forceSync = false;
+    if (!authFailed && !mem.upgrade) {
+      sum.synced = true;
+      store.setMeta('last_sync', String(clock()));
+      if (isRequested && requested !== null) {
+        mem.servedSync = requested;
+        mem.servedToConfirm = requested;
+        await beat();
+      }
     }
   }
 
@@ -313,10 +387,13 @@ export interface RunOptions {
   intervalMs?: number;
 }
 
-/** O laço do agente: um ciclo a cada 60 s, com o relógio lido de novo a cada volta. */
+/**
+ * O laço do agente: acorda a cada 60 s (relógio lido de novo a cada volta) e a cada volta fala com o
+ * servidor (heartbeat). Coleta e envio rodam a cada 15 min, ao iniciar, em `--once` e quando o
+ * heartbeat traz um pedido de sincronização.
+ */
 export async function runLoop(deps: AgentDeps, lock: Lock, opts: RunOptions): Promise<void> {
   const mem = newMemory();
-  mem.forceHeartbeat = !opts.once;
   const signal = opts.signal ?? new AbortController().signal;
   const clock = deps.now ?? Date.now;
   if (getState(deps.store) === 'upgrade') deps.store.setMeta('state', 'ok');

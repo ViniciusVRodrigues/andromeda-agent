@@ -1,6 +1,6 @@
 {
   "name": "andromeda-agent",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Agente local do Andromeda: envia só contagens de tokens das IAs de programação, sem prompt nem conteúdo",
   "license": "MIT",
   "author": "Vinícius Veiga Rodrigues",
@@ -27,7 +27,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test --test-reporter=spec \"dist/test/**/*.test.js\"",
-    "prepack": "npm run build"
+    "prepare": "node scripts/prepare.mjs"
   },
   "dependencies": {
     "@napi-rs/keyring": "2.1.2"

@@ -10,6 +10,9 @@ export interface E2eServer extends FakeServer {
   rawKeys: Set<string>;
   activeTaskBodies: unknown[];
   heartbeats: number;
+  heartbeatBodies: Array<Record<string, unknown>>;
+  /** Pedido de "sincronizar agora" pendente; o heartbeat com `syncServed` igual o apaga. */
+  syncRequestedAt: string | null;
 }
 
 function maxRow(a: PayloadRow, b: PayloadRow): PayloadRow {
@@ -32,7 +35,8 @@ export async function startE2eServer(): Promise<E2eServer> {
   const usageCalls: E2eServer['usageCalls'] = [];
   const rawKeys = new Set<string>();
   const activeTaskBodies: unknown[] = [];
-  const state = { heartbeats: 0 };
+  const state = { heartbeats: 0, syncRequestedAt: null as string | null, activeTask: null as { workItemId: string; ref: string; title: string; since: string } | null };
+  const heartbeatBodies: Array<Record<string, unknown>> = [];
 
   const srv = await startServer((req: Seen, res) => {
     const url = new URL(req.url, 'http://x');
@@ -90,7 +94,9 @@ export async function startE2eServer(): Promise<E2eServer> {
     }
     if (req.method === 'POST' && path === '/agent/v1/heartbeat') {
       state.heartbeats++;
-      return json(res, 200, { serverTime: new Date().toISOString(), minVersion: '0.1.0', activeTask: null });
+      heartbeatBodies.push(body);
+      if (typeof body.syncServed === 'string' && body.syncServed === state.syncRequestedAt) state.syncRequestedAt = null;
+      return json(res, 200, { serverTime: new Date().toISOString(), minVersion: '0.1.0', activeTask: state.activeTask, syncRequestedAt: state.syncRequestedAt });
     }
     if (req.method === 'GET' && path === '/agent/v1/usage/reconcile') {
       const from = url.searchParams.get('from') ?? '';
@@ -112,9 +118,11 @@ export async function startE2eServer(): Promise<E2eServer> {
     }
     if (req.method === 'PUT' && path === '/agent/v1/active-task') {
       activeTaskBodies.push(body);
+      state.activeTask = { workItemId: 'w-9', ref: String(body.taskRef), title: 'Corrigir login', since: String(body.since ?? new Date().toISOString()) };
       return json(res, 200, { workItemId: 'w-9', ref: String(body.taskRef), title: 'Corrigir login', retroactiveRows: 2 });
     }
     if (req.method === 'DELETE' && path === '/agent/v1/active-task') {
+      state.activeTask = null;
       res.writeHead(204);
       return void res.end();
     }
@@ -131,13 +139,11 @@ export async function startE2eServer(): Promise<E2eServer> {
     return json(res, 404, { code: 'NOT_FOUND' });
   });
 
-  return Object.assign(srv, {
-    rows,
-    usageCalls,
-    rawKeys,
-    activeTaskBodies,
-    get heartbeats() {
-      return state.heartbeats;
-    },
-  }) as E2eServer;
+  const out = Object.assign(srv, { rows, usageCalls, rawKeys, activeTaskBodies, heartbeatBodies });
+  // getters/setters ao vivo (Object.assign copiaria só o valor)
+  Object.defineProperties(out, {
+    heartbeats: { get: () => state.heartbeats },
+    syncRequestedAt: { get: () => state.syncRequestedAt, set: (v: string | null) => void (state.syncRequestedAt = v) },
+  });
+  return out as unknown as E2eServer;
 }

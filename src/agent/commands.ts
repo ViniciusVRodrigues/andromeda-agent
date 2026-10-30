@@ -33,7 +33,7 @@ import { createLogger } from '../log.js';
 import { currentPatterns, loadStoredPatterns, refreshPatterns } from '../task/server-patterns.js';
 import { taskRefFromBranch } from '../task/patterns.js';
 import { collect } from './collect.js';
-import { acquireLock, getState, runLoop, type AgentDeps } from './loop.js';
+import { acquireLock, getState, runLoop, SYNC_INTERVAL_MS, type AgentDeps } from './loop.js';
 
 /** Tudo o que o CLI toca no mundo; os testes trocam as peças. */
 export interface CliContext {
@@ -461,6 +461,14 @@ async function patternsStatus(ctx: CliContext, store: Store): Promise<void> {
   line(ctx, `Branch atual: ${branch} → ${ref ? `o servidor deve concluir ${ref}` : 'nenhum padrão casa'}`);
 }
 
+/** Próximo envio: 15 min depois da última sincronização. */
+function nextSyncLine(lastSync: number | null, nowMs: number): string {
+  if (lastSync === null) return 'Próximo envio: na próxima volta';
+  const left = lastSync + SYNC_INTERVAL_MS - nowMs;
+  if (left <= 0) return 'Próximo envio: na próxima volta';
+  return `Próximo envio: em ~${Math.max(1, Math.ceil(left / 60_000))} min`;
+}
+
 async function cmdStatus(ctx: CliContext): Promise<number> {
   const creds = await credStoreOf(ctx).load().catch(() => null);
   line(ctx, creds ? `Pareado: sim, organização ${creds.organizationSlug}, servidor ${creds.serverUrl}` : 'Pareado: não');
@@ -475,6 +483,7 @@ async function cmdStatus(ctx: CliContext): Promise<number> {
       line(ctx, `Estado: ${creds ? stateLabel(state) : 'precisa parear'}`);
       line(ctx, `Última coleta: ${fmtTime(metaNum(store, 'last_collect'))}`);
       line(ctx, `Último envio: ${fmtTime(metaNum(store, 'last_send'))}`);
+      line(ctx, nextSyncLine(metaNum(store, 'last_sync'), (ctx.now ?? Date.now)()));
       line(ctx, `Pendentes: ${st.pending}`);
       line(ctx, `Rejeitadas: ${st.rejected}`);
       line(ctx, `Dia mais antigo pendente: ${st.oldestPendingDay ?? 'nenhum'}`);

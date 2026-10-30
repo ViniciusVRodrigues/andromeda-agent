@@ -102,6 +102,14 @@ test('ponta a ponta: parear, coletar, enviar só o delta, nada vaza, dry-run e t
     assert.equal(await runCli(['run', '--once'], r2.ctx), 0, r2.cap.text());
     assert.equal(srv.usageCalls.length, 1, 'a 2ª coleta não reenvia nada');
 
+    // ---- pedido "sincronizar agora" do servidor: o ciclo confirma com syncServed ----
+    srv.syncRequestedAt = '2026-10-29T18:00:01.123Z';
+    const rq = makeCtx(sb);
+    assert.equal(await runCli(['run', '--once'], rq.ctx), 0, rq.cap.text());
+    assert.ok(srv.heartbeatBodies.some((b) => b.syncServed === '2026-10-29T18:00:01.123Z'), 'confirmação com syncServed');
+    assert.equal(srv.syncRequestedAt, null, 'o servidor apagou o pedido atendido');
+    assert.ok(srv.heartbeatBodies.slice(0, 1).every((b) => !('syncServed' in b)), 'sem pedido não vai syncServed');
+
     // ---- cresce um log: só o delta ----
     appendFileSync(claudeFile, claudeLine({ id: 'msg_4', ts: base + 6000, cwd: sb.repo, branch: 'feature/AB#123-x', input: 1, output: 2 }));
     const r3 = makeCtx(sb);
