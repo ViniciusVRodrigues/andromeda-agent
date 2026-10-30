@@ -3,6 +3,7 @@ import {
   ApiError,
   type AgentApi,
   type DeviceCredentials,
+  type ClearActiveTaskRequest,
   type HeartbeatRequest,
   type HeartbeatResponse,
   type PayloadRow,
@@ -166,8 +167,8 @@ export class HttpAgentApi implements AgentApi {
     return (await this.request('PUT', '/agent/v1/active-task', req)) as unknown as SetActiveTaskResponse;
   }
 
-  async clearActiveTask(): Promise<void> {
-    await this.request('DELETE', '/agent/v1/active-task');
+  async clearActiveTask(req?: ClearActiveTaskRequest): Promise<void> {
+    await this.request('DELETE', '/agent/v1/active-task', req);
   }
 
   async listTasks(): Promise<TaskItem[]> {

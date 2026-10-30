@@ -165,7 +165,7 @@ test('ponta a ponta: parear, coletar, enviar só o delta, nada vaza, dry-run e t
     // ---- task ----
     const tk = makeCtx(sb);
     assert.equal(await runCli(['task', 'AB#9'], tk.ctx), 0, tk.cap.text());
-    assert.match(tk.cap.text(), /AB#9 - Corrigir login/);
+    assert.match(tk.cap.text(), /Tarefa ativa: AB#9 Corrigir login\. Vale até a meia-noite ou até você trocar de branch\./);
     assert.match(tk.cap.text(), /reatribuídas: 2/);
     const body = srv.activeTaskBodies[0] as { taskRef: string; since: string; day: string; repo: string };
     assert.equal(body.taskRef, 'AB#9');
@@ -177,7 +177,7 @@ test('ponta a ponta: parear, coletar, enviar só o delta, nada vaza, dry-run e t
     assert.match(lst.cap.text(), /AB#9\tTask\tCorrigir login/);
 
     // evento novo depois da tarefa: atribuição explícita
-    appendFileSync(claudeFile, claudeLine({ id: 'msg_5', ts: nowHour + 1000, cwd: sb.repo, branch: 'feature/outra', input: 3, output: 4 }));
+    appendFileSync(claudeFile, claudeLine({ id: 'msg_5', ts: nowHour + 1000, cwd: sb.repo, branch: 'main', input: 3, output: 4 }));
     const r4 = makeCtx(sb);
     assert.equal(await runCli(['run', '--once'], r4.ctx), 0, r4.cap.text());
     const last = srv.usageCalls[srv.usageCalls.length - 1]!.rows;

@@ -1,7 +1,7 @@
 import { readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENT_VERSION, ApiError } from '../types.js';
-import type { ActiveTask, AgentApi, HeartbeatResponse, LogParser, ParserEnv, PayloadRow, UsageBatchResponse } from '../types.js';
+import type { ActiveTask, ActiveTaskEnded, AgentApi, HeartbeatResponse, LogParser, ParserEnv, PayloadRow, UsageBatchResponse } from '../types.js';
 import { localDayOf, type Store } from '../store/db.js';
 import type { GitInfo } from '../task/git.js';
 import type { CredentialStore } from '../auth/tokens.js';
@@ -13,6 +13,7 @@ import { buildHeartbeat, heartbeatDue } from '../sync/heartbeat.js';
 import { reconcile } from '../sync/reconcile.js';
 import { nullLogger, type Logger } from '../log.js';
 import { collect, type CollectResult } from './collect.js';
+import { enforceExpiry, flushPendingEnd, getPendingEnd, setLastTaskEnd, setTaskConflict } from '../task/task-state.js';
 
 export const CYCLE_MS = 60_000;
 /** Coleta e envio a cada 15 min; devido com folga de 30 s (a volta do laço não é exata). */
@@ -52,7 +53,7 @@ export function guardedApi(api: AgentApi): AgentApi {
     reconcile: (a, b) => api.reconcile(a, b),
     usageKeys: (d) => api.usageKeys(d),
     setActiveTask: (r) => api.setActiveTask(r),
-    clearActiveTask: () => api.clearActiveTask(),
+    clearActiveTask: (r) => api.clearActiveTask(r),
     listTasks: () => api.listTasks(),
     workItemPatterns: () => api.workItemPatterns(),
   };
@@ -111,14 +112,46 @@ export function newMemory(): LoopMemory {
 function applyServerTask(deps: AgentDeps, t: ActiveTask): void {
   const taskRef = t.taskRef ?? t.ref;
   if (!taskRef) return;
+  // O fim da tarefa ainda não chegou ao servidor: a tarefa local já não vale, não a traga de volta.
+  if (getPendingEnd(deps.store)) return;
   const cur = deps.store.getLocalActiveTask();
   if (cur && cur.taskRef === taskRef) return;
   const since = Date.parse(t.since);
+  const sinceMs = Number.isFinite(since) ? since : (deps.now ?? Date.now)();
   deps.store.setLocalActiveTask({
     taskRef,
-    since: Number.isFinite(since) ? since : (deps.now ?? Date.now)(),
+    since: sinceMs,
     repo: t.repository ?? null,
+    title: t.title,
+    branch: t.branch ?? null,
+    cwd: null,
+    day: t.day ?? localDayOf(sinceMs, deps.timezone),
   });
+}
+
+/** O servidor encerrou a tarefa (item fechado, saiu da sprint, virou o dia): grava o fim e limpa a local, uma vez por `endedAt`. */
+function applyServerEnd(deps: AgentDeps, e: ActiveTaskEnded): void {
+  const { store } = deps;
+  if (!e.endedAt || store.getMeta('last_task_end_seen') === e.endedAt) return;
+  store.setMeta('last_task_end_seen', e.endedAt);
+  const endedMs = Date.parse(e.endedAt);
+  const cur = store.getLocalActiveTask();
+  // Tarefa marcada depois do fim é outra; o eco do nosso próprio DELETE e o CLEARED não são "expirou".
+  if (cur && Number.isFinite(endedMs) && cur.since > endedMs) return;
+  const ref = e.ref ?? cur?.taskRef;
+  if (e.reason !== 'CLEARED' && ref) {
+    const title = e.title || cur?.title;
+    setLastTaskEnd(store, {
+      taskRef: ref,
+      ...(title ? { title } : {}),
+      reason: e.reason,
+      at: e.endedAt,
+      ...(e.newBranch ? { newBranch: e.newBranch } : {}),
+      ...(e.newRepo ? { newRepo: e.newRepo } : {}),
+    });
+  }
+  if (cur) store.setLocalActiveTask(null);
+  setTaskConflict(store, null);
 }
 
 /** Coleta, envio e reconciliação diária. Sem `api`, só coleta. Devolve se a sessão foi recusada. */
@@ -135,7 +168,7 @@ async function syncNow(
   let authFailed = false;
 
   try {
-    sum.collect = await collect(store, deps.parsers, deps.git, deps.env, deps.timezone, { log });
+    sum.collect = await collect(store, deps.parsers, deps.git, deps.env, deps.timezone, { log, now: clock });
     store.setMeta('last_collect', String(clock()));
     if (sum.collect.rows > 0 || sum.collect.read > 0) {
       log.info(`coleta: ${sum.collect.read} arquivo(s), ${sum.collect.events} evento(s), ${sum.collect.rows} linha(s)`);
@@ -189,6 +222,13 @@ export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSumm
   const { store } = deps;
   const sum: CycleSummary = { collect: null, sent: 0, heartbeat: false, reconciled: false, synced: false, state: getState(store) };
 
+  // A tarefa marcada expira sozinha (dia, branch); o DELETE vai quando houver sessão.
+  try {
+    await enforceExpiry(store, deps.git, clock(), deps.timezone);
+  } catch {
+    /* conferir a tarefa nunca derruba a volta */
+  }
+
   const creds = await deps.creds.load();
   if (!creds) {
     // sem credencial: só coleta, como antes (não grava last_sync, então segue devido)
@@ -225,14 +265,18 @@ export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSumm
     await refreshPatterns(store, api, clock(), log);
   }
 
+  // fim da tarefa que ainda não chegou ao servidor: antes do heartbeat, para ele não devolver a tarefa
+  if (!mem.upgrade) await flushPendingEnd(store, api);
+
   /** Um heartbeat; leva `syncServed` enquanto houver confirmação pendente. Devolve a resposta ou null. */
   const beat = async (): Promise<HeartbeatResponse | null> => {
     try {
       const confirming = mem.servedToConfirm;
-      const res = await api.heartbeat(buildHeartbeat(store, AGENT_VERSION, deps.timezone, confirming));
+      const res = await api.heartbeat(buildHeartbeat(store, AGENT_VERSION, deps.timezone, confirming, clock()));
       store.setMeta('last_heartbeat', String(clock()));
       sum.heartbeat = true;
       if (confirming !== null && res.syncRequestedAt !== confirming) mem.servedToConfirm = null;
+      if (res.activeTaskEnded) applyServerEnd(deps, res.activeTaskEnded);
       if (res.activeTask) applyServerTask(deps, res.activeTask);
       else store.setLocalActiveTask(null);
       if (res.minVersion && versionLess(AGENT_VERSION, res.minVersion)) mem.upgrade = true;
@@ -264,6 +308,7 @@ export async function cycle(deps: AgentDeps, mem: LoopMemory): Promise<CycleSumm
     sum.syncReason = reason;
     authFailed = await syncNow(deps, mem, api, sum, onError);
     mem.forceSync = false;
+    if (!authFailed && !mem.upgrade) await flushPendingEnd(store, api);
     if (!authFailed && !mem.upgrade) {
       sum.synced = true;
       store.setMeta('last_sync', String(clock()));

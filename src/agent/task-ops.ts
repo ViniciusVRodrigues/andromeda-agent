@@ -4,6 +4,8 @@ import type { GitInfo } from '../task/git.js';
 import type { Logger } from '../log.js';
 import { currentPatterns, refreshPatterns } from '../task/server-patterns.js';
 import { taskRefFromBranch } from '../task/patterns.js';
+import { branchOf } from '../task/expiry.js';
+import { enforceExpiry, getLastTaskEnd, setTaskConflict, type LastTaskEnd } from '../task/task-state.js';
 
 /** O que as operações da tarefa ativa usam; o comando `task` e o MCP montam o mesmo. */
 export interface TaskOpsDeps {
@@ -26,21 +28,29 @@ export interface CurrentTask {
   branch: string | null;
   /** Tarefa que os padrões de branch tiram da branch atual. */
   branchRef: string | null;
+  /** Fim recente da tarefa anterior (expirou ou o servidor encerrou), se não há tarefa agora. */
+  lastEnd: LastTaskEnd | null;
 }
 
 export async function setTask(d: TaskOpsDeps, ref: string, cwd: string): Promise<SetTaskResult> {
   const now = d.now();
   const repo = await d.git.remoteOf(cwd);
+  const branch = await branchOf(d.git, cwd);
+  const day = localDayOf(now, d.timezone);
   const resp = await d.api().setActiveTask({
     taskRef: ref,
     since: new Date(now).toISOString(),
-    day: localDayOf(now, d.timezone),
+    day,
     repo,
+    branch,
   });
-  const task: LocalActiveTask = { taskRef: resp.ref || ref, since: now, repo };
+  const task: LocalActiveTask = { taskRef: resp.ref || ref, since: now, repo, title: resp.title, branch, cwd, day };
   const store = d.openStore();
   try {
     store.setLocalActiveTask(task);
+    store.deleteMeta('last_task_end');
+    store.deleteMeta('task_end_pending');
+    setTaskConflict(store, null);
     // Aproveita para renovar os padrões de branch (no máximo uma busca por hora).
     await refreshPatterns(store, d.api(), now, d.log);
   } finally {
@@ -54,6 +64,9 @@ export async function clearTask(d: TaskOpsDeps): Promise<void> {
   const store = d.openStore();
   try {
     store.setLocalActiveTask(null);
+    store.deleteMeta('last_task_end');
+    store.deleteMeta('task_end_pending');
+    setTaskConflict(store, null);
   } finally {
     store.close();
   }
@@ -63,18 +76,22 @@ export function listTasks(d: TaskOpsDeps): Promise<TaskItem[]> {
   return d.api().listTasks();
 }
 
-/** Só local: a tarefa marcada e o que a branch da pasta indica. Não fala com o servidor. */
+/**
+ * Só local: a tarefa marcada e o que a branch da pasta indica. Não fala com o servidor. Se a tarefa
+ * já venceu (virou o dia, outra branch) e o laço ainda não viu, expira aqui; o laço manda o DELETE.
+ */
 export async function currentTask(d: TaskOpsDeps, cwd: string): Promise<CurrentTask> {
   const store = d.openStore();
   try {
-    let branch: string | null = null;
+    const branch = await branchOf(d.git, cwd);
     try {
-      branch = await d.git.currentBranch(cwd);
+      await enforceExpiry(store, d.git, d.now(), d.timezone);
     } catch {
-      branch = null;
+      /* conferir não derruba o status */
     }
-    if (branch === 'HEAD') branch = null;
-    return { task: store.getLocalActiveTask(), branch, branchRef: taskRefFromBranch(branch, currentPatterns(store)) };
+    const task = store.getLocalActiveTask();
+    const branchRef = taskRefFromBranch(branch, currentPatterns(store));
+    return { task, branch, branchRef, lastEnd: task ? null : getLastTaskEnd(store) };
   } finally {
     store.close();
   }

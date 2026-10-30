@@ -26,6 +26,8 @@ Cada linha de uso:
 
 `key` é opaca para o servidor: `ferramenta:sessionHash:modelo:hora:hash(branch):hash(repo)`, com os dois hashes de 6 caracteres do SHA-256. `taskRef` só vai quando você marcou a tarefa com `andromeda-agent task`; a tarefa tirada do nome da branch é resolvida pelo servidor, que recebe a branch e `attributionMethod`. `branchApproximate` diz se a branch é a atual da pasta, e não a do instante da chamada.
 
+A tarefa marcada com `andromeda-agent task` expira sozinha (virada do dia local, outra branch, outro repositório). Quando a branch aponta outro item que o marcado, o agente manda no heartbeat o `taskConflict` (tarefa marcada, branch, item da branch, repositório e horário) e, ao fim da tarefa, o motivo com a nova branch ou o novo repositório (`DELETE /agent/v1/active-task`); como o resto, nomes de repositório e de branch saem em claro. Todo uso chega ao Andromeda como sugestão, que você confirma na tela de Uso de IA.
+
 O agente também lê do servidor os padrões de branch da organização (`GET /agent/v1/work-item-patterns`), sem enviar nada seu nessa chamada.
 
 Mais, no lote: `batchId, agentVersion, timezone`.

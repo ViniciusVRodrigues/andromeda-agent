@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ApiError } from '../../src/types.js';
 import type {
+  ClearActiveTaskRequest,
   AgentApi,
   HeartbeatRequest,
   HeartbeatResponse,
@@ -109,20 +110,32 @@ export class FakeServer implements AgentApi {
   /** Pedido de "sincronizar agora"; `undefined` imita servidor antigo (campo ausente). O `syncServed` igual o apaga. */
   syncRequestedAt: string | null | undefined = undefined;
   heartbeats: HeartbeatRequest[] = [];
+  /** Campos a mais na resposta do heartbeat (activeTask, activeTaskEnded). */
+  heartbeatExtra: Partial<HeartbeatResponse> = {};
   /** Faz o heartbeat de número n (começando em 1) falhar com erro de rede. */
   heartbeatFails: (n: number, req: HeartbeatRequest) => boolean = () => false;
   async heartbeat(req: HeartbeatRequest): Promise<HeartbeatResponse> {
     this.heartbeats.push(structuredClone(req));
     if (this.heartbeatFails(this.heartbeats.length, req)) throw new ApiError('rede', 0, null, null);
     if (req.syncServed !== undefined && req.syncServed === this.syncRequestedAt) this.syncRequestedAt = null;
-    const res: HeartbeatResponse = { serverTime: new Date().toISOString(), minVersion: '0.0.0', activeTask: null };
+    const res: HeartbeatResponse = { serverTime: new Date().toISOString(), minVersion: '0.0.0', activeTask: null, ...this.heartbeatExtra };
     if (this.syncRequestedAt !== undefined) res.syncRequestedAt = this.syncRequestedAt;
     return res;
   }
   async setActiveTask(_req?: unknown): Promise<SetActiveTaskResponse> {
     throw new Error('não usado');
   }
-  async clearActiveTask(): Promise<void> {}
+  clearCalls: Array<ClearActiveTaskRequest | undefined> = [];
+  /** Quantos DELETE ainda falham com erro de rede. */
+  clearFails = 0;
+  async clearActiveTask(req?: ClearActiveTaskRequest): Promise<void> {
+    this.clearCalls.push(req === undefined ? undefined : structuredClone(req));
+    if (this.clearFails > 0) {
+      this.clearFails--;
+      throw new ApiError('rede', 0, null, null);
+    }
+    this.heartbeatExtra = { ...this.heartbeatExtra, activeTask: null };
+  }
   async listTasks(): Promise<TaskItem[]> {
     return [];
   }

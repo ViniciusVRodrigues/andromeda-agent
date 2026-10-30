@@ -37,7 +37,8 @@ import { runHook } from '../ai/hook.js';
 import { configureAi, inspectAi, joinParts, removeAi, type AiOptions, type AiResult } from '../ai/integrations.js';
 import { taskRefFromBranch } from '../task/patterns.js';
 import { collect } from './collect.js';
-import { clearTask, listTasks, setTask, type TaskOpsDeps } from './task-ops.js';
+import { clearTask, currentTask, listTasks, setTask, type TaskOpsDeps } from './task-ops.js';
+import { setTaskLines, taskStatusLines, type TaskView } from './task-text.js';
 import { acquireLock, getState, runLoop, SYNC_INTERVAL_MS, type AgentDeps } from './loop.js';
 
 /** Tudo o que o CLI toca no mundo; os testes trocam as peças. */
@@ -230,8 +231,11 @@ async function cmdTask(ctx: CliContext, args: string[]): Promise<number> {
   const ref = args.find((a) => !a.startsWith('--'));
   if (!ref) throw new UsageError('uso: andromeda-agent task <ref> | --clear | --list');
   const r = await setTask(deps, ref, ctx.cwd);
-  line(ctx, `Tarefa ativa: ${r.task.taskRef} - ${r.title}`);
+  const cur = await currentTask(deps, ctx.cwd);
+  const [first, ...rest] = setTaskLines(r.task.taskRef, r.title, cur.branch, cur.branchRef);
+  line(ctx, first);
   line(ctx, `Linhas de uso já enviadas hoje e reatribuídas: ${r.retroactiveRows}`);
+  for (const l of rest) line(ctx, l);
   return 0;
 }
 
@@ -528,6 +532,12 @@ function nextSyncLine(lastSync: number | null, nowMs: number): string {
   return `Próximo envio: em ~${Math.max(1, Math.ceil(left / 60_000))} min`;
 }
 
+async function currentTaskView(ctx: CliContext): Promise<TaskView> {
+  const nowMs = (ctx.now ?? Date.now)();
+  const c = await currentTask(taskDeps(ctx), ctx.cwd);
+  return { task: c.task, branch: c.branch, branchRef: c.branchRef, lastEnd: c.lastEnd, nowMs, timezone: timezoneOf(ctx) };
+}
+
 async function cmdStatus(ctx: CliContext): Promise<number> {
   const creds = await credStoreOf(ctx).load().catch(() => null);
   line(ctx, creds ? `Pareado: sim, organização ${creds.organizationSlug}, servidor ${creds.serverUrl}` : 'Pareado: não');
@@ -539,7 +549,6 @@ async function cmdStatus(ctx: CliContext): Promise<number> {
     try {
       const st = store.stats();
       const state = getState(store);
-      const task = store.getLocalActiveTask();
       line(ctx, `Estado: ${creds ? stateLabel(state) : 'precisa parear'}`);
       line(ctx, `Última coleta: ${fmtTime(metaNum(store, 'last_collect'))}`);
       line(ctx, `Último envio: ${fmtTime(metaNum(store, 'last_send'))}`);
@@ -547,15 +556,8 @@ async function cmdStatus(ctx: CliContext): Promise<number> {
       line(ctx, `Pendentes: ${st.pending}`);
       line(ctx, `Rejeitadas: ${st.rejected}`);
       line(ctx, `Dia mais antigo pendente: ${st.oldestPendingDay ?? 'nenhum'}`);
-      line(ctx, `Tarefa ativa: ${task ? `${task.taskRef} desde ${fmtTime(task.since)}${task.repo ? ` (${task.repo})` : ''}` : 'nenhuma'}`);
-      if (task) {
-        const hours = Math.floor(((ctx.now ?? Date.now)() - task.since) / 3_600_000);
-        line(ctx, `Marcada há: ${hours} h`);
-        if (hours > 12) {
-          line(ctx, `Aviso: a tarefa ativa não expira sozinha (marcada há ${hours} h). Quando terminar, rode: andromeda-agent task --clear`);
-        }
-      }
       await patternsStatus(ctx, store);
+      for (const l of taskStatusLines(await currentTaskView(ctx))) line(ctx, `  ${l}`);
       lastAi = store.getMeta('last_ai_session');
     } finally {
       store.close();
