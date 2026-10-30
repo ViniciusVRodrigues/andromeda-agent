@@ -1,10 +1,11 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import * as zlib from 'node:zlib';
 import { AGENT_VERSION, ApiError } from '../types.js';
 import type { AgentApi, LocalActiveTask, LogParser, ParserEnv, PayloadRow, ToolId } from '../types.js';
-import { Store, localDayOf } from '../store/db.js';
+import { Store } from '../store/db.js';
 import { stateDir as resolveStateDir } from '../paths.js';
 import { parsers as defaultParsers } from '../parsers/index.js';
 import { claudeRoot } from '../parsers/claude.js';
@@ -30,9 +31,11 @@ import {
   type ServiceStatus,
 } from '../service/index.js';
 import { createLogger } from '../log.js';
-import { currentPatterns, loadStoredPatterns, refreshPatterns } from '../task/server-patterns.js';
+import { currentPatterns, loadStoredPatterns } from '../task/server-patterns.js';
+import { serveMcp } from '../mcp/server.js';
 import { taskRefFromBranch } from '../task/patterns.js';
 import { collect } from './collect.js';
+import { clearTask, listTasks, setTask, type TaskOpsDeps } from './task-ops.js';
 import { acquireLock, getState, runLoop, SYNC_INTERVAL_MS, type AgentDeps } from './loop.js';
 
 /** Tudo o que o CLI toca no mundo; os testes trocam as peças. */
@@ -57,6 +60,8 @@ export interface CliContext {
   parsers?: LogParser[];
   sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;
+  /** Entrada do servidor MCP; o CLI real usa o stdin. */
+  stdin?: Readable;
   /** Instala os tratadores de SIGINT/SIGTERM (o CLI real liga; testes não). */
   handleSignals?: boolean;
 }
@@ -194,45 +199,43 @@ async function cmdUnpair(ctx: CliContext): Promise<number> {
 
 // ---- task ----
 
+function taskDeps(ctx: CliContext): TaskOpsDeps {
+  return {
+    api: () => apiOf(ctx),
+    openStore: () => openStore(ctx),
+    git: gitOf(ctx),
+    now: ctx.now ?? Date.now,
+    timezone: timezoneOf(ctx),
+    log: createLogger(stateDirOf(ctx), ctx.now),
+  };
+}
+
 async function cmdTask(ctx: CliContext, args: string[]): Promise<number> {
-  const now = (ctx.now ?? Date.now)();
+  const deps = taskDeps(ctx);
   if (args.includes('--list')) {
-    const items = await apiOf(ctx).listTasks();
+    const items = await listTasks(deps);
     if (items.length === 0) line(ctx, 'Nenhuma tarefa na sua sprint.');
-    for (const t of items) line(ctx, `${t.ref}\t${t.type}\t${t.title}\t${t.sprintName}`);
+    for (const t of items) line(ctx, `${t.ref}	${t.type}	${t.title}	${t.sprintName}`);
     return 0;
   }
   if (args.includes('--clear')) {
-    await apiOf(ctx).clearActiveTask();
-    const store = openStore(ctx);
-    try {
-      store.setLocalActiveTask(null);
-    } finally {
-      store.close();
-    }
+    await clearTask(deps);
     line(ctx, 'Tarefa ativa removida.');
     return 0;
   }
   const ref = args.find((a) => !a.startsWith('--'));
   if (!ref) throw new UsageError('uso: andromeda-agent task <ref> | --clear | --list');
-  const repo = await gitOf(ctx).remoteOf(ctx.cwd);
-  const resp = await apiOf(ctx).setActiveTask({
-    taskRef: ref,
-    since: new Date(now).toISOString(),
-    day: localDayOf(now, timezoneOf(ctx)),
-    repo,
-  });
-  const task: LocalActiveTask = { taskRef: resp.ref || ref, since: now, repo };
-  const store = openStore(ctx);
-  try {
-    store.setLocalActiveTask(task);
-    // Aproveita para renovar os padrões de branch (no máximo uma busca por hora).
-    await refreshPatterns(store, apiOf(ctx), now, createLogger(stateDirOf(ctx), ctx.now));
-  } finally {
-    store.close();
-  }
-  line(ctx, `Tarefa ativa: ${task.taskRef} - ${resp.title}`);
-  line(ctx, `Linhas de uso já enviadas hoje e reatribuídas: ${resp.retroactiveRows}`);
+  const r = await setTask(deps, ref, ctx.cwd);
+  line(ctx, `Tarefa ativa: ${r.task.taskRef} - ${r.title}`);
+  line(ctx, `Linhas de uso já enviadas hoje e reatribuídas: ${r.retroactiveRows}`);
+  return 0;
+}
+
+// ---- mcp ----
+
+/** Servidor MCP das IAs: stdin/stdout são o canal; qualquer outra saída vai para o log. */
+async function cmdMcp(ctx: CliContext): Promise<number> {
+  await serveMcp({ ops: taskDeps(ctx), cwd: ctx.cwd, describeError }, ctx.stdin ?? process.stdin, { write: ctx.out });
   return 0;
 }
 
@@ -639,6 +642,8 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         return await cmdTask(ctx, rest);
       case 'run':
         return await cmdRun(ctx, rest);
+      case 'mcp':
+        return await cmdMcp(ctx);
       case '--dry-run':
       case 'dry-run':
         return await cmdDryRun(ctx, argv);
