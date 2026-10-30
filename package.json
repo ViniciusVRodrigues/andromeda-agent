@@ -27,7 +27,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test --test-reporter=spec \"dist/test/**/*.test.js\"",
-    "prepare": "npm run build"
+    "prepare": "node scripts/prepare.mjs"
   },
   "dependencies": {
     "@napi-rs/keyring": "2.1.2"
