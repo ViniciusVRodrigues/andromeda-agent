@@ -1,8 +1,7 @@
-# ATENCAO: este workflow NUNCA foi executado por ninguem. Ele publica o pacote
-# no npm, entao so a dona do projeto deve rodar, depois de: (1) ter a conta no
-# npm com 2FA ativo, (2) criar o segredo NPM_TOKEN no repositorio, (3) criar o
-# ambiente "npm" em Settings > Environments com aprovacao obrigatoria.
-# Dispara apenas manualmente (workflow_dispatch); nunca em push ou tag.
+# Publica no npm por Trusted Publishing (OIDC do GitHub Actions), sem token:
+# o pacote no npmjs.com confia neste repo, neste workflow e no ambiente "npm".
+# Dispara apenas manualmente (workflow_dispatch); o ambiente "npm" exige a
+# aprovacao da dona do projeto antes do publish.
 name: Release
 
 on:
@@ -25,6 +24,6 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm test
+      # Trusted Publishing pede npm >= 11.5.1
+      - run: npm install -g npm@latest
       - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
