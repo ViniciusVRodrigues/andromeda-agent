@@ -2,6 +2,7 @@ import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import { AGENT_VERSION } from '../types.js';
 import { clearTask, currentTask, listTasks, setTask, type TaskOpsDeps } from '../agent/task-ops.js';
+import { setTaskLines, taskStatusLines } from '../agent/task-text.js';
 
 /**
  * Servidor MCP por stdio (JSON-RPC, uma mensagem por linha) com as três
@@ -60,10 +61,8 @@ async function callTool(d: McpDeps, name: unknown, args: Record<string, unknown>
   switch (name) {
     case 'get_task': {
       const c = await currentTask(d.ops, d.cwd);
-      const hours = c.task ? Math.floor((d.ops.now() - c.task.since) / 3_600_000) : 0;
-      const marked = c.task ? `Tarefa ativa: ${c.task.taskRef} (marcada há ${hours} h${c.task.repo ? `, ${c.task.repo}` : ''}).` : 'Nenhuma tarefa ativa.';
-      const branch = c.branch ? ` Branch ${c.branch}: ${c.branchRef ?? 'não indica tarefa'}.` : '';
-      return marked + branch;
+      const view = { task: c.task, branch: c.branch, branchRef: c.branchRef, lastEnd: c.lastEnd, nowMs: d.ops.now(), timezone: d.ops.timezone };
+      return taskStatusLines(view).map((l) => l.trim()).join('\n');
     }
     case 'set_task': {
       if (args.clear === true) {
@@ -73,7 +72,9 @@ async function callTool(d: McpDeps, name: unknown, args: Record<string, unknown>
       const ref = typeof args.ref === 'string' ? args.ref.trim() : '';
       if (!ref) throw new ToolInputError('informe ref (ex.: AB#123) ou clear: true');
       const r = await setTask(d.ops, ref, d.cwd);
-      return `Tarefa ativa: ${r.task.taskRef} - ${r.title}. Linhas de uso de hoje reatribuídas: ${r.retroactiveRows}.`;
+      const cur = await currentTask(d.ops, d.cwd);
+      const [first, ...rest] = setTaskLines(r.task.taskRef, r.title, cur.branch, cur.branchRef);
+      return [`${first} Linhas de uso de hoje reatribuídas: ${r.retroactiveRows}.`, ...rest].join('\n');
     }
     case 'list_tasks': {
       const items = await listTasks(d.ops);

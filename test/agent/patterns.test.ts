@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { collect } from '../../src/agent/collect.js';
 import { cycle, newMemory, type AgentDeps } from '../../src/agent/loop.js';
 import { runCli } from '../../src/agent/commands.js';
-import { Store } from '../../src/store/db.js';
+import { Store, localDayOf } from '../../src/store/db.js';
 import { parsers } from '../../src/parsers/index.js';
 import { FileCredentialStore } from '../../src/auth/tokens.js';
 import { createGit } from '../../src/task/git.js';
@@ -192,16 +192,23 @@ test('status: tarefa antiga avisa, mostra a fonte dos padrões e o que o servido
     store.setLocalActiveTask({ taskRef: 'AB#1', since: now - 30 * HOUR, repo: null });
     const u0 = mk();
     assert.equal(await runCli(['status'], u0.ctx), 0);
-    assert.match(u0.cap.text(), /Marcada há: 30 h/);
-    assert.match(u0.cap.text(), /Aviso: a tarefa ativa não expira sozinha \(marcada há 30 h\)\. Quando terminar, rode: andromeda-agent task --clear/);
+    // marcada há 30 h: virou o dia, expirou
+    assert.match(u0.cap.text(), /^ {2}Tarefa ativa: nenhuma$/m);
+    assert.match(u0.cap.text(), /^ {4}AB#1 expirou às \d\d:\d\d: o dia acabou\.$/m);
+    assert.match(u0.cap.text(), /^ {4}Agora o uso vai pela branch: AB#42\.$/m);
+    assert.match(u0.cap.text(), /^ {4}Para marcar de novo: andromeda-agent task AB#1$/m);
+    assert.doesNotMatch(u0.cap.text(), /não expira sozinha|Marcada há/);
+    assert.match(u0.cap.text(), /^ {2}Todo uso chega como sugestão: confirme em Uso de IA.$/m);
     assert.match(u0.cap.text(), /Padrões de branch: padrão default \(AB#\), o servidor ainda não respondeu/);
     assert.match(u0.cap.text(), /Branch atual: feature\/AB#42-x → o servidor deve concluir AB#42/);
 
-    store.setLocalActiveTask({ taskRef: 'AB#1', since: now - 2 * HOUR, repo: null });
+    store.setLocalActiveTask({ taskRef: 'AB#1', since: now - 60_000, repo: null, day: localDayOf(now, 'UTC') });
     await refreshPatterns(store, new FakeServer(), now - 5 * 60_000);
     const u1 = mk();
     assert.equal(await runCli(['status'], u1.ctx), 0);
     assert.doesNotMatch(u1.cap.text(), /Aviso: a tarefa ativa/);
+    assert.match(u1.cap.text(), /^ {4}Aviso: a branch feature\/AB#42-x aponta AB#42\. O uso vai para AB#42\.$/m);
+    assert.match(u1.cap.text(), /^ {4}Para usar AB#1, troque de branch\.$/m);
     assert.match(u1.cap.text(), /Padrões de branch: 1 do servidor \(atualizados há 5 min\)/);
 
     execFileSync('git', ['-C', sb.repo, 'checkout', '-q', '-b', 'fix/123-foo'], { stdio: 'ignore' });

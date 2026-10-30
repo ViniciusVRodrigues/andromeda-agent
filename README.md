@@ -33,8 +33,8 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 | `andromeda-agent doctor` | Confere requisitos, pareamento, IAs encontradas e conexão. |
 | `andromeda-agent run` | Roda o agente em primeiro plano (é o que o serviço executa). `run --once` faz um ciclo e sai. |
 | `andromeda-agent --dry-run [--day AAAA-MM-DD]` | Mostra o JSON exato que seria enviado, sem enviar nada e sem gravar nada no estado. |
-| `andromeda-agent task <ref>` | Marca a tarefa ativa. O uso de IA sem tarefa do mesmo dia passa a apontar para ela (retroage). |
-| `andromeda-agent task --clear` | Tira a tarefa ativa. Ela não expira sozinha: o `status` avisa quando passa de 12 h. |
+| `andromeda-agent task <ref>` | Marca a tarefa ativa. O uso de IA sem tarefa do mesmo dia passa a apontar para ela (retroage). A marca expira sozinha na virada do dia local, ao trocar de branch e ao trocar de repositório; se a branch aponta outro item, a branch ganha e o agente avisa. Todo uso chega ao Andromeda como sugestão, para você confirmar em Uso de IA. |
+| `andromeda-agent task --clear` | Tira a tarefa ativa. O `status` mostra se a tarefa está valendo, se a branch está ganhando ou se ela expirou. |
 | `andromeda-agent task --list` | Lista as tarefas da sua sprint. |
 | `andromeda-agent mcp` | Servidor MCP por stdio (`get_task`, `set_task`, `list_tasks`); quem o chama é a IA, não você. |
 | `andromeda-agent hook <claude-code\|codex>` | Uso interno: o hook de início de sessão das IAs. Só anota, no seu computador, qual IA abriu sessão, em que pasta e quando. |

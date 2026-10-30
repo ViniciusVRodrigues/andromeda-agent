@@ -7,10 +7,14 @@ import type { CompiledPattern } from '../task/patterns.js';
 import { currentPatterns } from '../task/server-patterns.js';
 import { assertRowsSafe, buildRow, guardRows } from '../payload.js';
 import { nullLogger, type Logger } from '../log.js';
+import { localDayOf } from '../store/db.js';
+import { enforceExpiry, setTaskConflict } from '../task/task-state.js';
+import type { TaskConflict } from '../types.js';
 
 export interface CollectOptions {
   log?: Logger;
   patterns?: CompiledPattern[];
+  now?: () => number;
 }
 
 export interface CollectResult {
@@ -84,12 +88,29 @@ export async function collect(
   if (oldest !== null) {
     const hourStart = Math.floor(oldest / 3_600_000) * 3_600_000;
     const patterns = opts.patterns ?? currentPatterns(store);
-    const activeTask = store.getLocalActiveTask();
+    const clock = opts.now ?? Date.now;
+    const nowMs = clock();
+    const today = localDayOf(nowMs, timezone);
     const salt = store.getOrCreateSalt();
     const safe: PayloadRow[] = [];
-    for (const bucket of store.bucketsSince(hourStart, timezone)) {
-      const { taskRef, attributionMethod } = resolveTask(bucket, { activeTask, patterns });
-      const row = buildRow(bucket, { salt, taskRef, attributionMethod });
+    const buckets = store.bucketsSince(hourStart, timezone);
+    // A tarefa marcada expira antes de atribuir: virada do dia, outra branch ou outro repo.
+    const start = store.getLocalActiveTask();
+    const repos = start ? buckets.filter((b) => b.hourStart >= start.since).map((b) => b.repo) : [];
+    await enforceExpiry(store, git, nowMs, timezone, repos);
+    const stillActive = store.getLocalActiveTask() !== null;
+    // Os buckets são conferidos um a um (hora, dia, repo, branch), então mesmo a tarefa que acabou de
+    // expirar atribui o que ainda era dela (uso coletado com atraso).
+    const activeTask = start;
+    let conflict: TaskConflict | null = null;
+    let sawToday = false;
+    for (const bucket of buckets) {
+      const r = resolveTask(bucket, { activeTask, patterns, timezone });
+      if (bucket.day === today) sawToday = true;
+      if (r.conflict && bucket.day === today) {
+        conflict = { ...r.conflict, repo: bucket.repo, at: new Date(nowMs).toISOString() };
+      }
+      const row = buildRow(bucket, { salt, taskRef: r.taskRef, attributionMethod: r.attributionMethod });
       const problems = guardRows([row]);
       if (problems.length > 0) {
         log.warn(`linha ${row.key} descartada pela lista de permissão`);
@@ -97,6 +118,9 @@ export async function collect(
       }
       safe.push(row);
     }
+    // O último conflito de hoje fica; coleta de hoje sem conflito limpa; conflito de outro dia some.
+    if (conflict && stillActive) setTaskConflict(store, conflict);
+    else if (sawToday || !stillActive) setTaskConflict(store, null);
     assertRowsSafe(safe);
     store.enqueue(safe);
     res.rows = safe.length;

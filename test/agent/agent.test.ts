@@ -167,9 +167,9 @@ test('ciclo: heartbeat traz a tarefa ativa do servidor; envio ok volta a "ok"', 
     await creds.save(fakeCreds());
     writeText(join(sb.home, '.claude', 'projects', 'p', 's.jsonl'), claudeLine({ id: 'a', ts: BASE, cwd: sb.repo, input: 1, output: 1 }));
     const api = new FakeServer();
-    api.heartbeat = async () => ({ serverTime: '', minVersion: '0.0.1', activeTask: { workItemId: 'w', ref: 'PROJ-7', title: 't', since: '2026-10-29T10:00:00Z' } });
+    api.heartbeat = async () => ({ serverTime: '', minVersion: '0.0.1', activeTask: { workItemId: 'w', ref: 'PROJ-7', title: 't', since: new Date(BASE).toISOString() } });
     store.setMeta('state', 'needs_pair');
-    const s = await cycle(deps(sb, store, api, { creds }), newMemory());
+    const s = await cycle(deps(sb, store, api, { creds, now: () => BASE + 60_000 }), newMemory());
     assert.equal(s.state, 'ok');
     assert.equal(s.sent, 1);
     assert.equal(store.getLocalActiveTask()?.taskRef, 'PROJ-7');

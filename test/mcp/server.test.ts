@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { runCli } from '../../src/agent/commands.js';
 import { handleMessage, INSTRUCTIONS, TOOLS, type McpDeps } from '../../src/mcp/server.js';
 import { nullLogger } from '../../src/log.js';
-import { Store } from '../../src/store/db.js';
+import { Store, localDayOf } from '../../src/store/db.js';
 import { createGit } from '../../src/task/git.js';
 import { ApiError } from '../../src/types.js';
 import type { SetActiveTaskRequest } from '../../src/types.js';
@@ -76,12 +77,12 @@ test('mcp: get_task é só local (não chama a API) com e sem tarefa', async () 
     const d = mkDeps(sb, api);
     const none = await tool(d, 'get_task');
     assert.equal(none.result.isError, undefined);
-    assert.match(none.result.content[0].text, /Nenhuma tarefa ativa\. Branch main:/);
+    assert.match(none.result.content[0].text, /^Tarefa ativa: nenhuma\nBranch main: não indica tarefa\. O uso vai para revisão em Uso de IA\.\nTodo uso chega como sugestão: confirme em Uso de IA\.$/);
     const s = Store.open(sb.state);
-    s.setLocalActiveTask({ taskRef: 'AB#7', since: Date.now() - 3 * 3_600_000, repo: 'github.com/acme/repo' });
+    s.setLocalActiveTask({ taskRef: 'AB#7', since: Date.now() - 60_000, repo: 'github.com/acme/repo', title: 'Fazer sete', day: localDayOf(Date.now(), 'UTC') });
     s.close();
     const some = await tool(d, 'get_task');
-    assert.match(some.result.content[0].text, /Tarefa ativa: AB#7 \(marcada há 3 h, github.com\/acme\/repo\)/);
+    assert.match(some.result.content[0].text, /^Tarefa ativa: AB#7 Fazer sete \(repo\), marcada às \d\d:\d\d\nVale até a meia-noite ou até você trocar de branch\.\nTodo uso chega como sugestão: confirme em Uso de IA\.$/);
   } finally {
     sb.cleanup();
   }
@@ -102,7 +103,7 @@ test('mcp: set_task com ref chama a API com o repo do cwd e grava local; clear d
     const d = mkDeps(sb, api);
     const r = await tool(d, 'set_task', { ref: ' AB#5 ' });
     assert.equal(r.result.isError, undefined);
-    assert.match(r.result.content[0].text, /Tarefa ativa: AB#5 - Fazer X\. Linhas de uso de hoje reatribuídas: 2\./);
+    assert.match(r.result.content[0].text, /^Tarefa ativa: AB#5 Fazer X\. Vale até a meia-noite ou até você trocar de branch\. Linhas de uso de hoje reatribuídas: 2\.$/);
     assert.equal(reqs.length, 1);
     assert.equal(reqs[0]!.taskRef, 'AB#5');
     assert.equal(reqs[0]!.repo, 'github.com/acme/repo');
@@ -169,7 +170,30 @@ test('mcp: runCli mcp só escreve JSON-RPC no out; erros e não pareado viram is
     assert.equal(byId(null).error.code, -32700);
     assert.equal(byId(3).result.isError, true);
     assert.match(byId(3).result.content[0].text, /não está pareado/);
-    assert.match(byId(4).result.content[0].text, /Nenhuma tarefa ativa/);
+    assert.match(byId(4).result.content[0].text, /Tarefa ativa: nenhuma/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test('mcp: set_task com a branch apontando outro item devolve o aviso; get_task mostra a branch ganhando', async () => {
+  const sb = makeSandbox();
+  try {
+    execFileSync('git', ['-C', sb.repo, 'symbolic-ref', 'HEAD', 'refs/heads/feature/AB#4812-custo'], { stdio: 'ignore' });
+    const api = new FakeServer();
+    api.setActiveTask = async () => ({ workItemId: 'w', ref: 'AB#4790', title: 'Tela', retroactiveRows: 0 });
+    const d = mkDeps(sb, api);
+    const r = await tool(d, 'set_task', { ref: 'AB#4790' });
+    assert.equal(
+      r.result.content[0].text,
+      'Tarefa ativa: AB#4790 Tela. Vale até a meia-noite ou até você trocar de branch. Linhas de uso de hoje reatribuídas: 0.\n' +
+        'Aviso: a branch feature/AB#4812-custo aponta AB#4812, e a branch ganha. Para o uso ir para AB#4790, troque de branch.',
+    );
+    const g = await tool(d, 'get_task');
+    assert.match(
+      g.result.content[0].text,
+      /^Tarefa ativa: AB#4790 Tela \(repo\), marcada às \d\d:\d\d\nAviso: a branch feature\/AB#4812-custo aponta AB#4812\. O uso vai para AB#4812\.\nPara usar AB#4790, troque de branch\.\nTodo uso/,
+    );
   } finally {
     sb.cleanup();
   }

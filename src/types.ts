@@ -111,6 +111,39 @@ export interface ActiveTask {
   title: string;
   since: string;
   repository?: string | null;
+  /** Branch da pasta no momento de marcar (servidor 0.5+). */
+  branch?: string | null;
+  /** Dia local da marcação (servidor 0.5+). */
+  day?: string | null;
+}
+
+export type TaskEndReason = 'BRANCH_CHANGED' | 'REPO_CHANGED' | 'DAY_ENDED' | 'ITEM_CLOSED' | 'LEFT_SPRINT' | 'CLEARED';
+
+/** Branch que ganhou da tarefa marcada (mandado no heartbeat; só nome de repo e de branch). */
+export interface TaskConflict {
+  taskRef: string;
+  branch: string;
+  branchRef: string;
+  repo: string | null;
+  /** ISO. */
+  at: string;
+}
+
+/** Fim da tarefa ativa, como o servidor devolve no heartbeat. */
+export interface ActiveTaskEnded {
+  ref?: string | null;
+  title?: string | null;
+  reason: TaskEndReason | string;
+  /** ISO. */
+  endedAt: string;
+  newBranch?: string | null;
+  newRepo?: string | null;
+}
+
+export interface ClearActiveTaskRequest {
+  reason: TaskEndReason;
+  newBranch?: string | null;
+  newRepo?: string | null;
 }
 
 export interface HeartbeatRequest {
@@ -120,6 +153,8 @@ export interface HeartbeatRequest {
   oldestPendingDay: string | null;
   /** O `syncRequestedAt` que o agente atendeu, devolvido como veio. */
   syncServed?: string;
+  /** Último conflito branch x tarefa visto hoje; `null` limpa; ausente = não muda. */
+  taskConflict?: TaskConflict | null;
 }
 
 export interface HeartbeatResponse {
@@ -128,6 +163,8 @@ export interface HeartbeatResponse {
   activeTask: ActiveTask | null;
   /** Pedido de sincronizar agora ainda não atendido; ausente em servidor antigo. */
   syncRequestedAt?: string | null;
+  /** Fim recente da tarefa ativa (o agente deduplica por `endedAt`); ausente em servidor antigo. */
+  activeTaskEnded?: ActiveTaskEnded | null;
 }
 
 export interface ReconcileDay {
@@ -142,6 +179,8 @@ export interface SetActiveTaskRequest {
   since: string;
   day: string;
   repo?: string | null;
+  /** Branch da pasta ao marcar. */
+  branch?: string | null;
 }
 
 export interface SetActiveTaskResponse {
@@ -194,7 +233,7 @@ export interface AgentApi {
   reconcile(from: string, to: string): Promise<ReconcileDay[]>;
   usageKeys(day: string): Promise<string[]>;
   setActiveTask(req: SetActiveTaskRequest): Promise<SetActiveTaskResponse>;
-  clearActiveTask(): Promise<void>;
+  clearActiveTask(req?: ClearActiveTaskRequest): Promise<void>;
   listTasks(): Promise<TaskItem[]>;
   workItemPatterns(): Promise<WorkItemPatternsResponse>;
 }
@@ -218,7 +257,7 @@ export class ApiError extends Error {
   }
 }
 
-export const AGENT_VERSION = '0.4.1';
+export const AGENT_VERSION = '0.5.0';
 
 /** Evento já com repositório e branch resolvidos localmente (P3), pronto para guardar. */
 export interface ResolvedEvent extends UsageEvent {
@@ -255,4 +294,11 @@ export interface LocalActiveTask {
   /** Instante em ms. */
   since: number;
   repo: string | null;
+  title?: string;
+  /** Branch da pasta ao marcar; ausente em tarefa gravada pelo 0.4 (desconhecida). */
+  branch?: string | null;
+  /** Pasta onde foi marcada, para conferir a branch depois. */
+  cwd?: string | null;
+  /** Dia local da marcação; ausente em tarefa antiga (use localDayOf(since)). */
+  day?: string;
 }
