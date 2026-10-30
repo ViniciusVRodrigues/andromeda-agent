@@ -11,9 +11,13 @@ O código é aberto (MIT) para qualquer pessoa auditar o que é lido e enviado. 
 
 ## Instalação
 
+Enquanto o pacote não está no npm, instale direto do GitHub. O mesmo comando atualiza para a versão mais nova:
+
 ```sh
-npm i -g andromeda-agent
+npm i -g --install-links github:ViniciusVRodrigues/andromeda-agent
 ```
+
+O `--install-links` é necessário: sem ele, o npm 11 deixa a instalação global apontando para uma pasta temporária, e o agente não abre. Na instalação o npm compila o agente (baixa o TypeScript só para isso) e pode avisar de `allow-scripts`; o aviso não impede a instalação.
 
 O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale de forma global antes de rodar `install`: o serviço não funciona a partir do cache do `npx`.
 
@@ -37,7 +41,7 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 
 O agente envia o uso a cada **15 minutos** (e ao iniciar). A cada **minuto** ele só fala com o servidor, para avisar que está vivo e saber se há um pedido para ele.
 
-Para não esperar: em Perfil → Conector de IA, use **Sincronizar agora**. O pedido chega ao agente em até cerca de 1 minuto. Versões abaixo da 0.3.0 não atendem esse pedido; atualize com `npm i -g andromeda-agent`.
+Para não esperar: em Perfil → Conector de IA, use **Sincronizar agora**. O pedido chega ao agente em até cerca de 1 minuto. Versões abaixo da 0.3.0 não atendem esse pedido; atualize com o comando da [Instalação](#instalação).
 
 O `andromeda-agent status` mostra quando será o próximo envio.
 
