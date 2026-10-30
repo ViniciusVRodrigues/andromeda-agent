@@ -45,6 +45,12 @@ Prompt, resposta da IA, conteúdo de arquivo, saída de ferramenta, caminho loca
 - **O nome do repositório e o nome da branch saem em claro.** Se o nome de uma branch ou repositório é sensível, ele será enviado assim mesmo.
 - O `sessionHash` é um hash do id da sessão com um **sal por máquina**, guardado só no seu computador: o servidor não consegue reverter nem ligar a mesma sessão entre máquinas.
 
+## Integração com as IAs (MCP e hook)
+
+- O **hook** de início de sessão guarda, só no seu computador, a IA, a pasta e a hora da última sessão (`status` mostra). Nada disso vai ao servidor.
+- O **MCP** (`set_task`, `get_task`, `list_tasks`) envia ao servidor só o que o comando `andromeda-agent task` já envia: a referência da tarefa, a data, o repositório normalizado e o pedido da lista. `get_task` é só local.
+- O `install` edita a configuração do Claude Code e do Codex (detalhes no README); `--no-ai` evita isso e `uninstall` desfaz.
+
 ## Telemetria própria
 
 Nenhuma. O agente só fala com o servidor do Andromeda ao qual você o pareou. Não há analytics, relatório de falhas nem chamada a terceiros.
