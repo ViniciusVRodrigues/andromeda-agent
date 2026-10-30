@@ -119,7 +119,7 @@ export class FakeServer implements AgentApi {
     if (this.syncRequestedAt !== undefined) res.syncRequestedAt = this.syncRequestedAt;
     return res;
   }
-  async setActiveTask(): Promise<SetActiveTaskResponse> {
+  async setActiveTask(_req?: unknown): Promise<SetActiveTaskResponse> {
     throw new Error('não usado');
   }
   async clearActiveTask(): Promise<void> {}

@@ -26,7 +26,7 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 | Comando | O que faz |
 |---|---|
 | `andromeda-agent pair <url-do-servidor>` | Liga este computador à sua conta do Andromeda. A URL do servidor só é aceita por aqui. |
-| `andromeda-agent install` | Registra o agente para iniciar sozinho no seu usuário (veja "Sobreviver a reinício"). |
+| `andromeda-agent install [--no-ai]` | Registra o agente para iniciar sozinho no seu usuário (veja "Sobreviver a reinício") e liga o MCP e o hook no Claude Code e no Codex (veja "IAs marcam a tarefa sozinhas"). `--no-ai` pula as IAs. |
 | `andromeda-agent uninstall` | Remove o registro do serviço. Com `--purge`, apaga também os dados locais e as credenciais. |
 | `andromeda-agent unpair` | Apaga as credenciais locais (a revogação no servidor é pelo app web). |
 | `andromeda-agent status` | Mostra se o serviço existe, se está ativo e o resultado da última execução. |
@@ -36,6 +36,8 @@ O comando fica disponível como `andromeda-agent` (e como `andromeda`). Instale 
 | `andromeda-agent task <ref>` | Marca a tarefa ativa. O uso de IA sem tarefa do mesmo dia passa a apontar para ela (retroage). |
 | `andromeda-agent task --clear` | Tira a tarefa ativa. Ela não expira sozinha: o `status` avisa quando passa de 12 h. |
 | `andromeda-agent task --list` | Lista as tarefas da sua sprint. |
+| `andromeda-agent mcp` | Servidor MCP por stdio (`get_task`, `set_task`, `list_tasks`); quem o chama é a IA, não você. |
+| `andromeda-agent hook <claude-code\|codex>` | Uso interno: o hook de início de sessão das IAs. Só anota, no seu computador, qual IA abriu sessão, em que pasta e quando. |
 
 ## Com que frequência ele envia
 
@@ -51,7 +53,20 @@ O `andromeda-agent status` mostra quando será o próximo envio.
 
 Ainda não: Roo Code (não grava o modelo de cada requisição), Copilot no VS Code (conta a menos no modo agente e não separa o cache), Copilot CLI, opencode 2.x e Cline 4.x (formato sem confirmação). O `andromeda-agent doctor` mostra quantos logs de cada IA ele achou.
 
-O agente só **lê** os arquivos dessas ferramentas. Nunca altera a configuração delas.
+O agente só **lê** os logs dessas ferramentas. A única configuração de IA que ele altera é a do Claude Code e do Codex, e só no `install` (veja abaixo).
+
+## IAs marcam a tarefa sozinhas
+
+O `andromeda-agent install` liga o agente ao Claude Code e ao Codex, se as pastas deles existem (`CLAUDE_CONFIG_DIR` ou `~/.claude`; `CODEX_HOME` ou `~/.codex`). Assim a IA chama `set_task` quando você cita a tarefa (ex.: `AB#123`) e diz qual marcou.
+
+- **Claude Code:** entrada `mcpServers.andromeda` no `.claude.json` (em `CLAUDE_CONFIG_DIR`, se definida, senão em `~/.claude.json`); `mcp__andromeda` em `permissions.allow` e um hook `SessionStart` no `settings.json`.
+- **Codex:** bloco entre `# >>> andromeda-agent` e `# <<< andromeda-agent` no `config.toml` (`[mcp_servers.andromeda]`), um hook `SessionStart` no `hooks.json` e um bloco com uma linha de instrução no `AGENTS.md`.
+
+Rodar `install` de novo troca o que é do agente, sem duplicar; o resto dos arquivos fica como está. Se o arquivo de configuração estiver ilegível, ou se você já tiver um `[mcp_servers.andromeda]` seu no Codex, o agente não mexe e avisa.
+
+**Custo:** cerca de 85 a 350 tokens por sessão no Claude Code e cerca de 40 no Codex (medição no estudo da change).
+
+**Como desligar:** `andromeda-agent install --no-ai` não toca nas IAs; `andromeda-agent uninstall` remove só o que o `install` pôs. O `status` e o `doctor` mostram o que está ligado.
 
 ## Onde fica o estado
 

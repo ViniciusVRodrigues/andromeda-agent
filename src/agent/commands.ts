@@ -1,10 +1,11 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import * as zlib from 'node:zlib';
 import { AGENT_VERSION, ApiError } from '../types.js';
 import type { AgentApi, LocalActiveTask, LogParser, ParserEnv, PayloadRow, ToolId } from '../types.js';
-import { Store, localDayOf } from '../store/db.js';
+import { Store } from '../store/db.js';
 import { stateDir as resolveStateDir } from '../paths.js';
 import { parsers as defaultParsers } from '../parsers/index.js';
 import { claudeRoot } from '../parsers/claude.js';
@@ -30,9 +31,13 @@ import {
   type ServiceStatus,
 } from '../service/index.js';
 import { createLogger } from '../log.js';
-import { currentPatterns, loadStoredPatterns, refreshPatterns } from '../task/server-patterns.js';
+import { currentPatterns, loadStoredPatterns } from '../task/server-patterns.js';
+import { serveMcp } from '../mcp/server.js';
+import { runHook } from '../ai/hook.js';
+import { configureAi, inspectAi, joinParts, removeAi, type AiOptions, type AiResult } from '../ai/integrations.js';
 import { taskRefFromBranch } from '../task/patterns.js';
 import { collect } from './collect.js';
+import { clearTask, listTasks, setTask, type TaskOpsDeps } from './task-ops.js';
 import { acquireLock, getState, runLoop, SYNC_INTERVAL_MS, type AgentDeps } from './loop.js';
 
 /** Tudo o que o CLI toca no mundo; os testes trocam as peças. */
@@ -57,6 +62,8 @@ export interface CliContext {
   parsers?: LogParser[];
   sleep?: (ms: number) => Promise<void>;
   signal?: AbortSignal;
+  /** Entrada do servidor MCP; o CLI real usa o stdin. */
+  stdin?: Readable;
   /** Instala os tratadores de SIGINT/SIGTERM (o CLI real liga; testes não). */
   handleSignals?: boolean;
 }
@@ -77,8 +84,10 @@ Comandos:
   run --once                 Faz um ciclo (coleta e envio) e sai
   --dry-run [--day AAAA-MM-DD]
                              Mostra o JSON exato que seria enviado, sem enviar nada
-  install                    Registra o agente para iniciar sozinho no seu usuário
-  uninstall [--purge]        Remove o serviço (--purge apaga também dados e credenciais)
+  mcp                        Servidor MCP por stdio (get_task, set_task, list_tasks) para as IAs
+  hook <claude-code|codex>   Uso interno: o hook de início de sessão das IAs (grava só local)
+  install [--no-ai]          Registra o agente para iniciar sozinho; liga o MCP e o hook no Claude Code e no Codex (--no-ai pula)
+  uninstall [--purge]        Remove o serviço e as ligações com as IAs (--purge apaga também dados e credenciais)
   status                     Mostra pareamento, filas, estado e serviço
   doctor                     Confere requisitos, IAs encontradas e conexão
   --version                  Mostra a versão
@@ -194,46 +203,90 @@ async function cmdUnpair(ctx: CliContext): Promise<number> {
 
 // ---- task ----
 
+function taskDeps(ctx: CliContext): TaskOpsDeps {
+  return {
+    api: () => apiOf(ctx),
+    openStore: () => openStore(ctx),
+    git: gitOf(ctx),
+    now: ctx.now ?? Date.now,
+    timezone: timezoneOf(ctx),
+    log: createLogger(stateDirOf(ctx), ctx.now),
+  };
+}
+
 async function cmdTask(ctx: CliContext, args: string[]): Promise<number> {
-  const now = (ctx.now ?? Date.now)();
+  const deps = taskDeps(ctx);
   if (args.includes('--list')) {
-    const items = await apiOf(ctx).listTasks();
+    const items = await listTasks(deps);
     if (items.length === 0) line(ctx, 'Nenhuma tarefa na sua sprint.');
-    for (const t of items) line(ctx, `${t.ref}\t${t.type}\t${t.title}\t${t.sprintName}`);
+    for (const t of items) line(ctx, `${t.ref}	${t.type}	${t.title}	${t.sprintName}`);
     return 0;
   }
   if (args.includes('--clear')) {
-    await apiOf(ctx).clearActiveTask();
-    const store = openStore(ctx);
-    try {
-      store.setLocalActiveTask(null);
-    } finally {
-      store.close();
-    }
+    await clearTask(deps);
     line(ctx, 'Tarefa ativa removida.');
     return 0;
   }
   const ref = args.find((a) => !a.startsWith('--'));
   if (!ref) throw new UsageError('uso: andromeda-agent task <ref> | --clear | --list');
-  const repo = await gitOf(ctx).remoteOf(ctx.cwd);
-  const resp = await apiOf(ctx).setActiveTask({
-    taskRef: ref,
-    since: new Date(now).toISOString(),
-    day: localDayOf(now, timezoneOf(ctx)),
-    repo,
-  });
-  const task: LocalActiveTask = { taskRef: resp.ref || ref, since: now, repo };
-  const store = openStore(ctx);
-  try {
-    store.setLocalActiveTask(task);
-    // Aproveita para renovar os padrões de branch (no máximo uma busca por hora).
-    await refreshPatterns(store, apiOf(ctx), now, createLogger(stateDirOf(ctx), ctx.now));
-  } finally {
-    store.close();
-  }
-  line(ctx, `Tarefa ativa: ${task.taskRef} - ${resp.title}`);
-  line(ctx, `Linhas de uso já enviadas hoje e reatribuídas: ${resp.retroactiveRows}`);
+  const r = await setTask(deps, ref, ctx.cwd);
+  line(ctx, `Tarefa ativa: ${r.task.taskRef} - ${r.title}`);
+  line(ctx, `Linhas de uso já enviadas hoje e reatribuídas: ${r.retroactiveRows}`);
   return 0;
+}
+
+// ---- mcp ----
+
+/** Servidor MCP das IAs: stdin/stdout são o canal; qualquer outra saída vai para o log. */
+async function cmdMcp(ctx: CliContext): Promise<number> {
+  await serveMcp({ ops: taskDeps(ctx), cwd: ctx.cwd, describeError }, ctx.stdin ?? process.stdin, { write: ctx.out });
+  return 0;
+}
+
+// ---- hook ----
+
+async function cmdHook(ctx: CliContext, args: string[]): Promise<number> {
+  try {
+    const tool = args[0] ?? '';
+    const hi = args.indexOf('--home');
+    const agentHome = hi >= 0 ? args[hi + 1] : undefined;
+    const c: CliContext = agentHome ? { ...ctx, env: { ...ctx.env, ANDROMEDA_AGENT_HOME: agentHome } } : ctx;
+    return await runHook(tool, { stdin: ctx.stdin ?? process.stdin, cwd: ctx.cwd, openStore: () => openStore(c), now: ctx.now ?? Date.now });
+  } catch {
+    return 0;
+  }
+}
+
+// ---- IAs ----
+
+function aiOptions(ctx: CliContext): AiOptions {
+  return {
+    home: homeOf(ctx),
+    env: ctx.env,
+    nodePath: ctx.nodePath ?? process.execPath,
+    cliPath: ctx.cliPath ?? '',
+    platform: ctx.platform ?? process.platform,
+  };
+}
+
+function aiSafe(ctx: CliContext, fn: (o: AiOptions) => AiResult[]): AiResult[] {
+  try {
+    return fn(aiOptions(ctx));
+  } catch (e) {
+    ctx.err(`aviso: não consegui mexer na configuração das IAs (${describeError(e)})
+`);
+    return [];
+  }
+}
+
+function printAi(ctx: CliContext, results: AiResult[], verb: 'ligados' | 'removidos'): void {
+  for (const r of results) {
+    if (!r.found) line(ctx, `${r.label}: não encontrado.`);
+    else if (r.parts.length > 0) line(ctx, `${r.label}: ${joinParts(r.parts)} ${verb}.`);
+    else if (r.warnings.length === 0 && verb === 'removidos') line(ctx, `${r.label}: nada do agente para remover.`);
+    for (const w of r.warnings) ctx.err(`aviso: ${w}
+`);
+  }
 }
 
 // ---- run ----
@@ -371,7 +424,7 @@ function planOf(ctx: CliContext): ReturnType<typeof planService> {
   });
 }
 
-async function cmdInstall(ctx: CliContext): Promise<number> {
+async function cmdInstall(ctx: CliContext, args: string[]): Promise<number> {
   if (ctx.cliPath && /[\\/]_npx[\\/]/.test(ctx.cliPath)) {
     ctx.err('Este agente está rodando de um cache temporário do npx; o serviço quebraria quando o cache for limpo.\n');
     ctx.err('Instale de verdade e rode de novo: npm i -g andromeda-agent && andromeda-agent install\n');
@@ -387,13 +440,18 @@ async function cmdInstall(ctx: CliContext): Promise<number> {
     store.close();
   }
   const r = await installService(plan, ctx.runner ?? nodeRunner, ctx.serviceFs ?? nodeServiceFs);
+  const ai = (): void => {
+    if (!args.includes('--no-ai')) printAi(ctx, aiSafe(ctx, configureAi), 'ligados');
+  };
   if (r.manual) {
     line(ctx, r.manual);
+    ai();
     return 0;
   }
   for (const n of r.notes) line(ctx, n);
   if (!r.ok) return 1;
   line(ctx, 'Serviço instalado: o agente inicia sozinho no seu usuário.');
+  ai();
   return 0;
 }
 
@@ -414,6 +472,7 @@ async function cmdUninstall(ctx: CliContext, args: string[]): Promise<number> {
   const plan = planOf(ctx);
   await uninstallService(plan, ctx.runner ?? nodeRunner, ctx.serviceFs ?? nodeServiceFs);
   line(ctx, 'Serviço removido.');
+  printAi(ctx, aiSafe(ctx, removeAi), 'removidos');
   if (args.includes('--purge')) {
     await credStoreOf(ctx).clear();
     // Só os arquivos do agente: ANDROMEDA_AGENT_HOME pode apontar para uma pasta com outras coisas.
@@ -472,6 +531,7 @@ function nextSyncLine(lastSync: number | null, nowMs: number): string {
 async function cmdStatus(ctx: CliContext): Promise<number> {
   const creds = await credStoreOf(ctx).load().catch(() => null);
   line(ctx, creds ? `Pareado: sim, organização ${creds.organizationSlug}, servidor ${creds.serverUrl}` : 'Pareado: não');
+  let lastAi: string | null = null;
   const store = openExistingStore(ctx);
   if (!store) {
     line(ctx, 'Dados locais: ainda não há (o agente nunca rodou)');
@@ -496,6 +556,7 @@ async function cmdStatus(ctx: CliContext): Promise<number> {
         }
       }
       await patternsStatus(ctx, store);
+      lastAi = store.getMeta('last_ai_session');
     } finally {
       store.close();
     }
@@ -508,6 +569,16 @@ async function cmdStatus(ctx: CliContext): Promise<number> {
     if (svc.running !== null) parts.push(svc.running ? 'rodando' : 'parado');
     if (svc.lastResult) parts.push(`último resultado ${svc.lastResult}`);
     line(ctx, `Serviço: instalado, ${parts.join(', ')}`);
+  }
+  const linked = aiSafe(ctx, inspectAi).filter((r) => r.parts.length > 0);
+  line(ctx, linked.length > 0 ? `IAs: ${linked.map((r) => `${r.label} (${r.parts.join(', ')})`).join(', ')}` : 'IAs: nenhuma ligada (andromeda-agent install)');
+  if (lastAi) {
+    try {
+      const j = JSON.parse(lastAi) as { tool?: string; cwd?: string; at?: string };
+      if (j.tool && j.cwd && j.at) line(ctx, `Última sessão de IA: ${j.tool} em ${j.cwd}, ${j.at}`);
+    } catch {
+      /* meta ilegível: ignora */
+    }
   }
   return 0;
 }
@@ -565,6 +636,13 @@ async function cmdDoctor(ctx: CliContext): Promise<number> {
     // Claude e Codex são as IAs principais; as outras só aparecem como aviso se alguém as usa.
     const main = p.tool === 'claude-code' || p.tool === 'codex';
     add(n > 0 || !main ? 'OK' : 'AVISO', `Logs de ${p.tool}: ${n} arquivo(s) em ${base}`);
+  }
+
+  for (const r of aiSafe(ctx, inspectAi)) {
+    if (!r.found) continue;
+    const all = r.tool === 'claude-code' ? 2 : 3;
+    if (r.parts.length >= all) add('OK', `${r.label}: ${r.parts.join(', ')} ligados`);
+    else add('AVISO', `${r.label}: ${r.parts.length > 0 ? `só ${r.parts.join(', ')} ligados` : 'não ligado'} (rode andromeda-agent install)`);
   }
 
   let creds = null;
@@ -639,11 +717,15 @@ export async function runCli(argv: string[], ctx: CliContext): Promise<number> {
         return await cmdTask(ctx, rest);
       case 'run':
         return await cmdRun(ctx, rest);
+      case 'mcp':
+        return await cmdMcp(ctx);
       case '--dry-run':
       case 'dry-run':
         return await cmdDryRun(ctx, argv);
+      case 'hook':
+        return await cmdHook(ctx, rest);
       case 'install':
-        return await cmdInstall(ctx);
+        return await cmdInstall(ctx, rest);
       case 'uninstall':
         return await cmdUninstall(ctx, rest);
       case 'status':
