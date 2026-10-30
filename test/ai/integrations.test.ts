@@ -4,13 +4,15 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { join } from 'node:path';
 import { runCli, type CliContext } from '../../src/agent/commands.js';
 import { hookCommand, isAgentHook, AGENTS_LINE } from '../../src/ai/integrations.js';
-import { fakeRunner, makeCtx, makeSandbox, type Sandbox } from '../agent/helpers.js';
+import { FileCredentialStore } from '../../src/auth/tokens.js';
+import { fakeCreds, fakeRunner, makeCtx, makeSandbox, type Sandbox } from '../agent/helpers.js';
 
 const CLI = '/opt/andromeda/dist/src/cli.js';
 const NODE = '/usr/bin/node';
 const serviceFs = { mkdir: async () => {}, writeFile: async () => {}, rm: async () => {} };
 
-function run(sb: Sandbox, args: string[], over: Partial<CliContext> = {}): Promise<{ code: number; text: string; err: string }> {
+async function run(sb: Sandbox, args: string[], over: Partial<CliContext> = {}): Promise<{ code: number; text: string; err: string }> {
+  await new FileCredentialStore(sb.state, () => {}).save(fakeCreds());
   const { ctx, cap } = makeCtx(sb, { cliPath: CLI, nodePath: NODE, platform: 'linux', uid: 1000, runner: fakeRunner(), serviceFs, ...over });
   return runCli(args, ctx).then((code) => ({ code, text: cap.out.join(''), err: cap.err.join('') }));
 }
@@ -209,6 +211,7 @@ test('install: sem ANDROMEDA_AGENT_HOME o servidor e o hook não levam env nem -
     delete sb.env.ANDROMEDA_AGENT_HOME;
     mkdirSync(claudeDir(sb), { recursive: true });
     mkdirSync(codexDir(sb), { recursive: true });
+    await new FileCredentialStore(sb.state, () => {}).save(fakeCreds());
     const { ctx } = makeCtx(sb, { cliPath: CLI, nodePath: NODE, platform: 'linux', uid: 1000, runner: fakeRunner(), serviceFs, env: { ...sb.env, XDG_STATE_HOME: join(sb.root, 'xdg') } });
     assert.equal(await runCli(['install'], ctx), 0);
     assert.equal(readJson(mcpFile(sb)).mcpServers.andromeda.env, undefined);

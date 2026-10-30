@@ -85,6 +85,10 @@ export function parseRetryAfter(v: string | null, now: () => number = Date.now):
 }
 
 const RATE_LIMIT_MAX_BACKOFF_SEC = 60;
+const TRANSIENT_MAX_BACKOFF_SEC = 30;
+const RETRY_NOTICE = 'Sem resposta do servidor; tentando de novo até o código expirar...';
+const UNREACHABLE_MSG =
+  'não foi possível falar com o servidor antes de o código expirar. Verifique a rede e rode `andromeda-agent pair` de novo';
 const RATE_LIMIT_EXPIRED_MSG =
   'o código de pareamento expirou enquanto o servidor limitava as tentativas (HTTP 429); rode o pareamento de novo em alguns minutos';
 
@@ -161,6 +165,8 @@ export async function pollForToken(
     fetch?: FetchLike;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
+    /** Chamado uma vez, na primeira falha transitória (rede, timeout, 5xx). */
+    onRetry?: (msg: string) => void;
   } = {},
 ): Promise<DeviceCredentials> {
   const base = validateServerUrl(serverUrl);
@@ -172,16 +178,41 @@ export async function pollForToken(
   let nextSec = waitSec;
   let rateLimited = 0;
   let sawRateLimit = false;
+  let transient = 0;
+  let sawTransient = false;
+  // Falha transitória: espera em dobro a cada tentativa, até 30 s, e avisa uma vez.
+  const transientBackoff = (): number => {
+    if (!sawTransient) opts.onRetry?.(RETRY_NOTICE);
+    sawTransient = true;
+    transient += 1;
+    return Math.min(waitSec * 2 ** (transient - 1), TRANSIENT_MAX_BACKOFF_SEC);
+  };
   for (;;) {
     await sleep(nextSec * 1000);
     nextSec = waitSec;
     if (now() >= deadline) {
-      throw new PairingError(sawRateLimit ? RATE_LIMIT_EXPIRED_MSG : 'o código de pareamento expirou', 'expired_token');
+      throw new PairingError(
+        sawTransient ? UNREACHABLE_MSG : sawRateLimit ? RATE_LIMIT_EXPIRED_MSG : 'o código de pareamento expirou',
+        'expired_token',
+      );
     }
-    const { res, json } = await postJson(f, `${base}/agent/v1/device/token`, {
-      grant_type: DEVICE_GRANT,
-      device_code: deviceCode,
-    });
+    let res: Response;
+    let json: Record<string, unknown>;
+    try {
+      ({ res, json } = await postJson(f, `${base}/agent/v1/device/token`, {
+        grant_type: DEVICE_GRANT,
+        device_code: deviceCode,
+      }));
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 0) throw e;
+      nextSec = transientBackoff();
+      continue;
+    }
+    if (res.status >= 500) {
+      nextSec = transientBackoff();
+      continue;
+    }
+    transient = 0;
     if (res.ok) return toCredentials(base, json as unknown as TokenResponse, now());
     if (res.status === 429) {
       sawRateLimit = true;

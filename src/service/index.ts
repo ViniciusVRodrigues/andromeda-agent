@@ -73,6 +73,8 @@ export interface InstallResult {
   /** Sem gerenciador de serviço: instrução manual, não é erro fatal. */
   manual?: string;
   notes: string[];
+  /** Windows: a tarefa foi criada, mas o `schtasks /run` falhou (tolerado). */
+  startFailed?: { code: number };
 }
 
 export function planService(input: PlanInput): ServicePlan {
@@ -113,15 +115,21 @@ export async function installService(plan: ServicePlan, runner: Runner, fs: Serv
     await fs.writeFile(f.path, encode(f), f.mode);
   }
   const tolerant = new Set(plan.tolerantInstall ?? []);
+  let startFailed: { code: number } | undefined;
   for (const [i, c] of plan.installCommands.entries()) {
     const r = await safeRun(runner, c);
-    if (r.code === 0 || tolerant.has(i)) continue;
+    if (r.code === 0) continue;
+    if (tolerant.has(i)) {
+      // No macOS o tolerado é o bootout da instalação anterior: falhar ali é normal.
+      if (plan.platform === 'win32') startFailed = { code: r.code };
+      continue;
+    }
     if (plan.platform === 'linux' && c[1].includes('--user')) {
       return { ok: false, manual: LINUX_MANUAL, notes: [] };
     }
     return { ok: false, notes: [`Falhou: ${c[0]} ${c[1].join(' ')} (código ${r.code}) ${r.stderr.trim()}`.trim()] };
   }
-  return { ok: true, notes: plan.hints };
+  return { ok: true, notes: plan.hints, ...(startFailed ? { startFailed } : {}) };
 }
 
 export async function uninstallService(plan: ServicePlan, runner: Runner, fs: ServiceFs): Promise<void> {

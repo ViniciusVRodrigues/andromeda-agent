@@ -39,7 +39,7 @@ import { taskRefFromBranch } from '../task/patterns.js';
 import { collect } from './collect.js';
 import { clearTask, currentTask, listTasks, setTask, type TaskOpsDeps } from './task-ops.js';
 import { setTaskLines, taskStatusLines, type TaskView } from './task-text.js';
-import { acquireLock, getState, runLoop, SYNC_INTERVAL_MS, type AgentDeps } from './loop.js';
+import { acquireLock, agentLockStatus, getState, runLoop, SYNC_INTERVAL_MS, type AgentDeps } from './loop.js';
 
 /** Tudo o que o CLI toca no mundo; os testes trocam as peças. */
 export interface CliContext {
@@ -178,6 +178,7 @@ async function cmdPair(ctx: CliContext, args: string[]): Promise<number> {
     ...fetchOpt,
     ...(ctx.sleep ? { sleep: ctx.sleep } : {}),
     ...(ctx.now ? { now: ctx.now } : {}),
+    onRetry: (msg) => line(ctx, msg),
   });
   await credStoreOf(ctx).save(creds);
   try {
@@ -434,6 +435,15 @@ async function cmdInstall(ctx: CliContext, args: string[]): Promise<number> {
     ctx.err('Instale de verdade e rode de novo: npm i -g andromeda-agent && andromeda-agent install\n');
     return 1;
   }
+  const notPaired = 'Este computador ainda não está pareado. Rode primeiro: andromeda-agent pair <url-do-servidor>\n';
+  const paired = (await credStoreOf(ctx).load().catch(() => null)) !== null;
+  if (!paired) {
+    if (!args.includes('--force')) {
+      ctx.err(notPaired);
+      return 1;
+    }
+    ctx.err(notPaired);
+  }
   const plan = planOf(ctx);
   const dir = stateDirOf(ctx);
   mkdirSync(dir, { recursive: true });
@@ -454,7 +464,14 @@ async function cmdInstall(ctx: CliContext, args: string[]): Promise<number> {
   }
   for (const n of r.notes) line(ctx, n);
   if (!r.ok) return 1;
-  line(ctx, 'Serviço instalado: o agente inicia sozinho no seu usuário.');
+  if (r.startFailed) {
+    line(
+      ctx,
+      `A tarefa foi criada, mas não iniciou agora (código ${r.startFailed.code}). Rode: schtasks /run /tn andromeda-agent`,
+    );
+  } else {
+    line(ctx, 'Serviço instalado: o agente inicia sozinho no seu usuário.');
+  }
   ai();
   return 0;
 }
@@ -538,6 +555,12 @@ async function currentTaskView(ctx: CliContext): Promise<TaskView> {
   return { task: c.task, branch: c.branch, branchRef: c.branchRef, lastEnd: c.lastEnd, nowMs, timezone: timezoneOf(ctx) };
 }
 
+function startCommandOf(platform: NodeJS.Platform): string {
+  if (platform === 'win32') return 'schtasks /run /tn andromeda-agent';
+  if (platform === 'darwin') return 'launchctl kickstart gui/$UID/dev.andromeda.agent';
+  return 'systemctl --user start andromeda-agent';
+}
+
 async function cmdStatus(ctx: CliContext): Promise<number> {
   const creds = await credStoreOf(ctx).load().catch(() => null);
   line(ctx, creds ? `Pareado: sim, organização ${creds.organizationSlug}, servidor ${creds.serverUrl}` : 'Pareado: não');
@@ -568,9 +591,12 @@ async function cmdStatus(ctx: CliContext): Promise<number> {
   else if (!svc.exists) line(ctx, 'Serviço: não instalado (rode andromeda-agent install)');
   else {
     const parts = [svc.enabled === null ? 'habilitado: ?' : svc.enabled ? 'habilitado' : 'desabilitado'];
-    if (svc.running !== null) parts.push(svc.running ? 'rodando' : 'parado');
+    // Quem diz se roda é o agent.lock (vale nos três SOs); o SO nem sempre informa.
+    const lock = agentLockStatus(stateDirOf(ctx), { now: ctx.now ?? Date.now });
+    parts.push(lock.running ? `rodando (pid ${lock.pid})` : 'parado');
     if (svc.lastResult) parts.push(`último resultado ${svc.lastResult}`);
     line(ctx, `Serviço: instalado, ${parts.join(', ')}`);
+    if (!lock.running) line(ctx, `Para iniciar agora: ${startCommandOf(ctx.platform ?? process.platform)}`);
   }
   const linked = aiSafe(ctx, inspectAi).filter((r) => r.parts.length > 0);
   line(ctx, linked.length > 0 ? `IAs: ${linked.map((r) => `${r.label} (${r.parts.join(', ')})`).join(', ')}` : 'IAs: nenhuma ligada (andromeda-agent install)');

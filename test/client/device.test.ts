@@ -241,3 +241,73 @@ test('device flow 429: Retry-After além do deadline desiste sem dormir', async 
     await srv.close();
   }
 });
+
+test('device flow: rede cai uma vez e depois vem o token', async () => {
+  let n = 0;
+  const f = (async () => {
+    n += 1;
+    if (n === 1) throw new TypeError('fetch failed');
+    return new Response(JSON.stringify(TOKEN_OK), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  const c = fakeClock();
+  const msgs: string[] = [];
+  const creds = await pollForToken('https://a.example.com', 'DC', 5, 600, {
+    fetch: f,
+    sleep: c.sleep,
+    now: c.now,
+    onRetry: (m) => msgs.push(m),
+  });
+  assert.equal(creds.accessToken, 'ACC1');
+  assert.equal(msgs.length, 1);
+  assert.deepEqual(c.sleeps, [5000, 5000]);
+});
+
+test('device flow: 503 três vezes com backoff e aviso uma vez só', async () => {
+  const srv = await startServer((_r, res, n) => (n <= 3 ? json(res, 503, {}) : json(res, 200, TOKEN_OK)));
+  const c = fakeClock();
+  const msgs: string[] = [];
+  try {
+    const creds = await pollForToken(srv.url, 'DC', 5, 600, { sleep: c.sleep, now: c.now, onRetry: (m) => msgs.push(m) });
+    assert.equal(creds.accessToken, 'ACC1');
+    assert.equal(msgs.length, 1);
+    assert.match(msgs[0]!, /Sem resposta do servidor/);
+    assert.deepEqual(c.sleeps, [5000, 5000, 10000, 20000]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('device flow: backoff transitório tem teto de 30 s', async () => {
+  const f = (async () => {
+    throw new TypeError('fetch failed');
+  }) as typeof fetch;
+  const c = fakeClock();
+  await assert.rejects(pollForToken('https://a.example.com', 'DC', 5, 200, { fetch: f, sleep: c.sleep, now: c.now }));
+  assert.ok(Math.max(...c.sleeps) === 30000);
+});
+
+test('device flow: servidor fora até o prazo -> expired_token com mensagem de rede', async () => {
+  const f = (async () => {
+    throw new TypeError('fetch failed');
+  }) as typeof fetch;
+  const c = fakeClock();
+  await assert.rejects(
+    pollForToken('https://a.example.com', 'DC', 5, 60, { fetch: f, sleep: c.sleep, now: c.now }),
+    (e: unknown) =>
+      e instanceof PairingError && e.code === 'expired_token' && /falar com o servidor/.test(e.message) && /pair/.test(e.message),
+  );
+});
+
+test('device flow: 4xx desconhecido continua final (sem nova tentativa)', async () => {
+  const srv = await startServer((_r, res) => json(res, 404, {}));
+  const c = fakeClock();
+  try {
+    await assert.rejects(
+      pollForToken(srv.url, 'DC', 5, 600, { sleep: c.sleep, now: c.now }),
+      (e: unknown) => e instanceof ApiError && e.status === 404,
+    );
+    assert.equal(srv.seen.length, 1);
+  } finally {
+    await srv.close();
+  }
+});
