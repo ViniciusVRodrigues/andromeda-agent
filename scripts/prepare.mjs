@@ -8,7 +8,7 @@ import { join } from "node:path";
 const root = join(import.meta.dirname, "..");
 const env = { ...process.env };
 for (const key of Object.keys(env)) {
-  if (/^npm_config_(global|prefix|location|omit|production)$/i.test(key)) delete env[key];
+  if (/^npm_config_(global|prefix|location|omit|production|allow_scripts|force)$/i.test(key)) delete env[key];
 }
 const run = (cmd) => execSync(cmd, { cwd: root, env, stdio: "inherit" });
 
