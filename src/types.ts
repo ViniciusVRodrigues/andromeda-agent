@@ -218,7 +218,7 @@ export class ApiError extends Error {
   }
 }
 
-export const AGENT_VERSION = '0.3.1';
+export const AGENT_VERSION = '0.4.0';
 
 /** Evento já com repositório e branch resolvidos localmente (P3), pronto para guardar. */
 export interface ResolvedEvent extends UsageEvent {
