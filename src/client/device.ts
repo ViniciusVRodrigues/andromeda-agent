@@ -72,11 +72,21 @@ export function baseHeaders(): Record<string, string> {
   return { 'X-Andromeda-Agent-Version': AGENT_VERSION, Accept: 'application/json' };
 }
 
-export function parseRetryAfter(v: string | null): number | null {
+/** Retry-After em segundos ou data HTTP. Devolve segundos (>= 0) ou null se ausente/inválido. */
+export function parseRetryAfter(v: string | null, now: () => number = Date.now): number | null {
   if (v === null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? n : null;
+  const t = v.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  if (Number.isFinite(n)) return n >= 0 ? n : null;
+  const ms = Date.parse(t);
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, Math.ceil((ms - now()) / 1000));
 }
+
+const RATE_LIMIT_MAX_BACKOFF_SEC = 60;
+const RATE_LIMIT_EXPIRED_MSG =
+  'o código de pareamento expirou enquanto o servidor limitava as tentativas (HTTP 429); rode o pareamento de novo em alguns minutos';
 
 export async function readJson(res: Response): Promise<Record<string, unknown>> {
   try {
@@ -159,18 +169,36 @@ export async function pollForToken(
   const now = opts.now ?? Date.now;
   const deadline = now() + expiresIn * 1000;
   let waitSec = Math.max(1, interval);
+  let nextSec = waitSec;
+  let rateLimited = 0;
+  let sawRateLimit = false;
   for (;;) {
-    await sleep(waitSec * 1000);
-    if (now() >= deadline) throw new PairingError('o código de pareamento expirou', 'expired_token');
+    await sleep(nextSec * 1000);
+    nextSec = waitSec;
+    if (now() >= deadline) {
+      throw new PairingError(sawRateLimit ? RATE_LIMIT_EXPIRED_MSG : 'o código de pareamento expirou', 'expired_token');
+    }
     const { res, json } = await postJson(f, `${base}/agent/v1/device/token`, {
       grant_type: DEVICE_GRANT,
       device_code: deviceCode,
     });
     if (res.ok) return toCredentials(base, json as unknown as TokenResponse, now());
+    if (res.status === 429) {
+      sawRateLimit = true;
+      rateLimited += 1;
+      const ra = parseRetryAfter(res.headers.get('retry-after'), now);
+      const sec =
+        ra !== null ? Math.max(ra, waitSec) : Math.min(waitSec * 2 ** rateLimited, RATE_LIMIT_MAX_BACKOFF_SEC);
+      if (now() + sec * 1000 >= deadline) throw new PairingError(RATE_LIMIT_EXPIRED_MSG, 'expired_token');
+      nextSec = sec;
+      continue;
+    }
+    rateLimited = 0;
     const err = typeof json.error === 'string' ? json.error : null;
     if (res.status === 400 && err === 'authorization_pending') continue;
     if (res.status === 400 && err === 'slow_down') {
       waitSec += 5;
+      nextSec = waitSec;
       continue;
     }
     if (res.status === 400 && err === 'access_denied') {

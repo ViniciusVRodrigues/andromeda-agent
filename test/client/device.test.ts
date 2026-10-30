@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PairingError, pollForToken, startPairing, validateServerUrl } from '../../src/client/device.js';
+import { PairingError, parseRetryAfter, pollForToken, startPairing, validateServerUrl } from '../../src/client/device.js';
 import { AGENT_VERSION, ApiError } from '../../src/types.js';
 import { json, startServer, TOKEN_OK } from './fake-server.js';
 
@@ -139,5 +139,105 @@ test('device flow: expired_token do servidor e expiração local', async () => {
     assert.equal(srv2.seen.length, 2);
   } finally {
     await srv2.close();
+  }
+});
+
+test('parseRetryAfter: segundos, data HTTP, lixo, null, data passada', () => {
+  const now = () => Date.parse('2026-01-01T00:00:00Z');
+  assert.equal(parseRetryAfter('30', now), 30);
+  assert.equal(parseRetryAfter('0', now), 0);
+  assert.equal(parseRetryAfter('Thu, 01 Jan 2026 00:00:30 GMT', now), 30);
+  assert.equal(parseRetryAfter('Thu, 01 Jan 2026 00:00:30 GMT', () => now() + 500), 30);
+  assert.equal(parseRetryAfter('Wed, 31 Dec 2025 23:00:00 GMT', now), 0);
+  assert.equal(parseRetryAfter('abc', now), null);
+  assert.equal(parseRetryAfter('', now), null);
+  assert.equal(parseRetryAfter('-5', now), null);
+  assert.equal(parseRetryAfter(null, now), null);
+  assert.equal(parseRetryAfter('7'), 7);
+});
+
+test('device flow 429: Retry-After em segundos espera e tenta de novo', async () => {
+  const srv = await startServer((_r, res, n) =>
+    n === 1 ? json(res, 429, { code: 'AGENT_RATE_LIMITED' }, { 'Retry-After': '30' }) : json(res, 200, TOKEN_OK),
+  );
+  const c = fakeClock();
+  try {
+    const creds = await pollForToken(srv.url, 'DC', 5, 600, { sleep: c.sleep, now: c.now });
+    assert.deepEqual(c.sleeps, [5000, 30000]);
+    assert.equal(creds.accessToken, 'ACC1');
+  } finally {
+    await srv.close();
+  }
+});
+
+test('device flow 429: Retry-After em data HTTP', async () => {
+  const c = fakeClock();
+  const srv = await startServer((_r, res, n) =>
+    n === 1
+      ? json(res, 429, {}, { 'Retry-After': new Date(c.now() + 20_000).toUTCString() })
+      : json(res, 200, TOKEN_OK),
+  );
+  try {
+    await pollForToken(srv.url, 'DC', 5, 600, { sleep: c.sleep, now: c.now });
+    assert.deepEqual(c.sleeps, [5000, 20000]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('device flow 429: Retry-After menor que o intervalo usa o intervalo', async () => {
+  const srv = await startServer((_r, res, n) =>
+    n === 1 ? json(res, 429, {}, { 'Retry-After': '1' }) : json(res, 200, TOKEN_OK),
+  );
+  const c = fakeClock();
+  try {
+    await pollForToken(srv.url, 'DC', 5, 600, { sleep: c.sleep, now: c.now });
+    assert.deepEqual(c.sleeps, [5000, 5000]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('device flow 429: sem cabeçalho recua exponencial com teto e zera após não-429', async () => {
+  const srv = await startServer((_r, res, n) => {
+    if (n <= 5) return json(res, 429, { code: 'AGENT_RATE_LIMITED' });
+    if (n === 6) return json(res, 400, { error: 'authorization_pending' });
+    if (n === 7) return json(res, 429, {});
+    json(res, 200, TOKEN_OK);
+  });
+  const c = fakeClock();
+  try {
+    await pollForToken(srv.url, 'DC', 5, 6000, { sleep: c.sleep, now: c.now });
+    assert.deepEqual(c.sleeps, [5000, 10000, 20000, 40000, 60000, 60000, 5000, 10000]);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('device flow 429: repetido até o deadline vira expired_token com a mensagem do 429', async () => {
+  const srv = await startServer((_r, res) => json(res, 429, {}));
+  const c = fakeClock();
+  try {
+    await assert.rejects(
+      pollForToken(srv.url, 'DC', 5, 100, { sleep: c.sleep, now: c.now }),
+      (e: unknown) => e instanceof PairingError && e.code === 'expired_token' && /HTTP 429/.test(e.message),
+    );
+  } finally {
+    await srv.close();
+  }
+});
+
+test('device flow 429: Retry-After além do deadline desiste sem dormir', async () => {
+  const srv = await startServer((_r, res) => json(res, 429, {}, { 'Retry-After': '500' }));
+  const c = fakeClock();
+  try {
+    await assert.rejects(
+      pollForToken(srv.url, 'DC', 5, 100, { sleep: c.sleep, now: c.now }),
+      (e: unknown) => e instanceof PairingError && e.code === 'expired_token' && /HTTP 429/.test(e.message),
+    );
+    assert.deepEqual(c.sleeps, [5000]);
+    assert.equal(srv.seen.length, 1);
+  } finally {
+    await srv.close();
   }
 });

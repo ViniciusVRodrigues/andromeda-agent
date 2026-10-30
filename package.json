@@ -1,6 +1,6 @@
 {
   "name": "andromeda-agent",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agente local do Andromeda: envia só contagens de tokens das IAs de programação, sem prompt nem conteúdo",
   "license": "MIT",
   "author": "Vinícius Veiga Rodrigues",
